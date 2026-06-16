@@ -1,0 +1,97 @@
+{
+  "_id": {
+    "$oid": "68b8615092e460e8cfe6d021"
+  },
+  "userId": {
+    "$oid": "68a7857f232d4c604d058e28"
+  },
+  "sesionId": {
+    "$oid": "68b84eb692e460e8cfe6ceda"
+  },
+  "nombreBot": "bot1",
+  "descripcion": "Bot IA Gemini - Sesión: 68b84eb692e460e8cfe6ceda - Número: 573181359070",
+  "tipoBot": "ia",
+  "configIA": {
+    "userbot": "bot1",
+    "apikey": "AIzaSyAGijNh2i7eRaDBol9FlbrcUHFh5SHDdPM",
+    "server": "https://backend.autosystemprojects.site",
+    "promt": "Eres un asistente virtual útil y amigable que responde preguntas de manera clara y concisa.",
+    "pais": "colombia",
+    "idioma": "es",
+    "numerodemensajes": 8,
+    "delay_seconds": 8,
+    "temperature": 0.7,
+    "topP": 0.9,
+    "maxOutputTokens": 512,
+    "pause_timeout_minutes": 30,
+    "ai_model": "gemini-2.5-flash",
+    "thinking_budget": -1,
+    "activo": true
+  },
+  "plantilla": {
+    "mensajeBienvenida": {
+      "tipo": "texto",
+      "contenido": "¡Hola! Bienvenido a nuestro servicio.",
+      "activo": true
+    },
+    "mensajeDespedida": {
+      "tipo": "texto",
+      "contenido": "¡Gracias por contactarnos! Que tengas un excelente día.",
+      "activo": true
+    },
+    "mensajeNoEntendido": {
+      "tipo": "texto",
+      "contenido": "Lo siento, no entendí tu mensaje. ¿Podrías reformularlo?",
+      "activo": true
+    },
+    "respuestasAutomaticas": [],
+    "horarios": {
+      "activo": false,
+      "zonaHoraria": "America/Bogota",
+      "horarios": [],
+      "mensajeFueraHorario": "Gracias por contactarnos. Nuestro horario de atención es..."
+    },
+    "flujos": []
+  },
+  "estadisticas": {
+    "conversacionesIniciadas": 0,
+    "mensajesEnviados": 0,
+    "mensajesRecibidos": 0,
+    "flujos_completados": 0,
+    "tasaRespuesta": 0,
+    "tiempoPromedioRespuesta": 0,
+    "mensajesFiltrados": 0,
+    "eventosFiltrado": []
+  },
+  "configuracionAvanzada": {
+    "autoActivar": false,
+    "respuestaRapida": true,
+    "aprenderDeConversaciones": false,
+    "guardarHistorial": true,
+    "filtroSpam": true,
+    "limiteConversacionesDiario": 1000
+  },
+  "configuracionFiltrado": {
+    "filtroActivo": false,
+    "codigosPaisRestringir": "",
+    "codigosPaisPermitir": "",
+    "usarPeopleAPI": false,
+    "googleAuthToken": "",
+    "googleRefreshToken": "",
+    "responderContactosAgendados": false,
+    "filtroNombreContacto": ""
+  },
+  "tags": [
+    "gemini",
+    "ia",
+    "chatbot"
+  ],
+  "version": "1.0.0",
+  "historialVersiones": [],
+  "createdAt": {
+    "$date": "2025-09-03T15:40:00.819Z"
+  },
+  "updatedAt": {
+    "$date": "2025-09-03T15:40:02.673Z"
+  }
+}

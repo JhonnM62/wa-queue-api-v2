@@ -1,0 +1,196 @@
+{
+  "_id": {
+    "$oid": "68c11e8bf5cc872167356073"
+  },
+  "userId": {
+    "$oid": "68c0db3ef5cc872167355dca"
+  },
+  "sesionId": {
+    "$oid": "68c11ba1f5cc872167355e95"
+  },
+  "nombreBot": "Bot1",
+  "descripcion": "Bot IA Gemini - Sesión: 68c11ba1f5cc872167355e95 - Número: 573181359070",
+  "tipoBot": "ia",
+  "configIA": {
+    "userbot": "Bot1",
+    "apikey": "AIzaSyCQ8prk_2yDfsAWWcLaPQHTK8YNyyHmZro",
+    "server": "https://backend.autosystemprojects.site",
+    "promt": "Eres un asistente virtual útil y amigable que responde preguntas de manera clara y concisa.",
+    "pais": "colombia",
+    "idioma": "es",
+    "numerodemensajes": 8,
+    "delay_seconds": 8,
+    "temperature": 0.7,
+    "topP": 0.9,
+    "maxOutputTokens": 512,
+    "pause_timeout_minutes": 30,
+    "ai_model": "gemini-2.5-flash",
+    "thinking_budget": -1,
+    "activo": true
+  },
+  "plantilla": {
+    "mensajeBienvenida": {
+      "tipo": "texto",
+      "contenido": "¡Hola! Bienvenido a nuestro servicio.",
+      "activo": true
+    },
+    "mensajeDespedida": {
+      "tipo": "texto",
+      "contenido": "¡Gracias por contactarnos! Que tengas un excelente día.",
+      "activo": true
+    },
+    "mensajeNoEntendido": {
+      "tipo": "texto",
+      "contenido": "Lo siento, no entendí tu mensaje. ¿Podrías reformularlo?",
+      "activo": true
+    },
+    "horarios": {
+      "activo": false,
+      "zonaHoraria": "America/Bogota",
+      "horarios": [],
+      "mensajeFueraHorario": "Gracias por contactarnos. Nuestro horario de atención es..."
+    },
+    "respuestasAutomaticas": [],
+    "flujos": []
+  },
+  "estadisticas": {
+    "conversacionesIniciadas": 0,
+    "mensajesEnviados": 27,
+    "mensajesRecibidos": 18,
+    "flujos_completados": 0,
+    "tasaRespuesta": 0,
+    "tiempoPromedioRespuesta": 0,
+    "mensajesFiltrados": 9,
+    "eventosFiltrado": [
+      {
+        "fecha": {
+          "$date": "2025-09-10T06:45:43.798Z"
+        },
+        "numeroFiltrado": "573002167901",
+        "razon": "Contacto agendado: Admin Jhonnier Pruebas",
+        "_id": {
+          "$oid": "68c11e97f5cc872167356085"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T06:46:04.901Z"
+        },
+        "numeroFiltrado": "573002167901",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c11eacf5cc8721673560a5"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T06:46:27.701Z"
+        },
+        "numeroFiltrado": "573002167901",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c11ec3f5cc8721673560d1"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T06:46:52.571Z"
+        },
+        "numeroFiltrado": "573158208619",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c11edcf5cc8721673560db"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T14:43:24.993Z"
+        },
+        "numeroFiltrado": "status@broadcast",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c18e8cf5cc872167356345"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T14:45:29.996Z"
+        },
+        "numeroFiltrado": "status@broadcast",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c18f09f5cc872167356353"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T15:00:49.978Z"
+        },
+        "numeroFiltrado": "status@broadcast",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c192a1f5cc872167356370"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T15:03:13.463Z"
+        },
+        "numeroFiltrado": "status@broadcast",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c19331f5cc872167356382"
+        }
+      },
+      {
+        "fecha": {
+          "$date": "2025-09-10T15:10:57.018Z"
+        },
+        "numeroFiltrado": "status@broadcast",
+        "razon": "Número no está en contactos agendados",
+        "_id": {
+          "$oid": "68c19501f5cc87216735639d"
+        }
+      }
+    ],
+    "ultimaActividad": {
+      "$date": "2025-09-10T17:19:41.167Z"
+    }
+  },
+  "configuracionAvanzada": {
+    "autoActivar": false,
+    "limiteConversacionesDiario": 1000,
+    "aprenderDeConversaciones": false,
+    "filtroSpam": true,
+    "guardarHistorial": true,
+    "respuestaRapida": true
+  },
+  "configuracionFiltrado": {
+    "filtroActivo": true,
+    "codigosPaisRestringir": "",
+    "codigosPaisPermitir": "",
+    "usarPeopleAPI": true,
+    "googleAuthToken": "ya29.a0AS3H6NzmuZmfg-lUa9RSg4dY_rgmROoniuKWAGISaFuaQuO2vkpnBlZ8WlncbfulQfs7buyWBeoLIK8U0vx_Pu8HBBeh4Om_bLreCyGtezz04vmqAgZ_LdhluPN9tOxFIXT6bOEVkW4F3qroZQhYe0RrSC5ai6rQweOpqiecZW2y_9klB2BV0sjENo7_PtjjB40RbP6HaCgYKARASARASFQHGX2MiZ14DV_7EVtPCSk7GKuNeAg0207",
+    "googleRefreshToken": "1//091Jtlf1WQxhgCgYIARAAGAkSNwF-L9IrAFksKF_3druyn11Oyd2woFm6lJmsPo-61ws5JC1_0KAkimNbNwMi73BC476XHQpK4ak",
+    "googleTokenExpiry": "1757528377421",
+    "googleAuthDate": "Wed Sep 10 2025 17:19:38 GMT+0000 (Coordinated Universal Time)",
+    "responderContactosAgendados": true,
+    "filtroNombreContacto": "",
+    "needsReauth": true,
+    "reauthReason": "expired",
+    "reauthTimestamp": "Wed Sep 10 2025 16:04:25 GMT+0000 (Coordinated Universal Time)"
+  },
+  "tags": [
+    "gemini",
+    "ia",
+    "chatbot"
+  ],
+  "version": "1.0.0",
+  "historialVersiones": [],
+  "createdAt": {
+    "$date": "2025-09-10T06:45:31.873Z"
+  },
+  "updatedAt": {
+    "$date": "2025-09-10T17:19:41.167Z"
+  }
+}

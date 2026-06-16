@@ -1,0 +1,153 @@
+{
+  "_id": {
+    "$oid": "68a78580232d4c604d058e33"
+  },
+  "userId": {
+    "$oid": "68a7857f232d4c604d058e28"
+  },
+  "planId": {
+    "$oid": "6893743c59ca20844217cc3b"
+  },
+  "estado": "cancelada",
+  "fechas": {
+    "inicio": {
+      "$date": "2025-08-21T20:45:52.133Z"
+    },
+    "fin": {
+      "$date": "2025-09-04T20:45:52.133Z"
+    },
+    "ultimoPago": {
+      "$date": "2025-08-21T20:45:52.133Z"
+    },
+    "proximoPago": null,
+    "cancelacion": {
+      "$date": "2025-08-21T20:47:12.246Z"
+    }
+  },
+  "pago": {
+    "metodo": "gratuito",
+    "montoBase": 0,
+    "montoTotal": 0,
+    "comisiones": {
+      "paypal": {
+        "porcentaje": 0,
+        "montoComisionPorcentual": 0,
+        "tarifaFija": 0,
+        "comisionTotal": 0
+      },
+      "otras": 0
+    },
+    "moneda": "USD",
+    "transaccionId": "14DIAS_1755809152134",
+    "procesadorPago": "system",
+    "monto": 0
+  },
+  "usoActual": {
+    "sesiones": 0,
+    "botsIA": 0,
+    "webhooks": 0,
+    "mensajesEnviados": 0,
+    "ultimaActualizacionUso": {
+      "$date": "2025-08-21T20:45:52.134Z"
+    }
+  },
+  "renovacionAutomatica": {
+    "activa": false,
+    "intentos": 0,
+    "ultimoIntento": null
+  },
+  "motivoCancelacion": {
+    "descripcion": null,
+    "fechaCancelacion": null
+  },
+  "metadata": {
+    "ip": "auto-created",
+    "userAgent": "System",
+    "codigoPromocional": null,
+    "origenRegistro": "signup_automatico"
+  },
+  "createdAt": {
+    "$date": "2025-08-21T20:45:52.137Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-21T20:47:12.248Z"
+  }
+}
+
+y l otra esta la siguiente: 
+
+{
+  "_id": {
+    "$oid": "68a785d0232d4c604d058ece"
+  },
+  "userId": {
+    "$oid": "68a7857f232d4c604d058e28"
+  },
+  "planId": {
+    "$oid": "6893743c59ca20844217cc46"
+  },
+  "estado": "activa",
+  "fechas": {
+    "inicio": {
+      "$date": "2025-09-04T20:45:52.133Z"
+    },
+    "fin": {
+      "$date": "2025-10-04T20:45:52.133Z"
+    },
+    "ultimoPago": {
+      "$date": "2025-08-21T20:47:12.430Z"
+    },
+    "proximoPago": {
+      "$date": "2025-10-04T20:45:52.133Z"
+    },
+    "cancelacion": null
+  },
+  "pago": {
+    "metodo": "paypal",
+    "montoBase": 7,
+    "montoTotal": 7.68,
+    "comisiones": {
+      "paypal": {
+        "porcentaje": 0,
+        "montoComisionPorcentual": 0,
+        "tarifaFija": 0,
+        "comisionTotal": 0
+      },
+      "otras": 0
+    },
+    "moneda": "USD",
+    "transaccionId": "1G356296178151547",
+    "procesadorPago": "paypal",
+    "monto": 7.68
+  },
+  "usoActual": {
+    "sesiones": 1,
+    "botsIA": 1,
+    "webhooks": 1,
+    "mensajesEnviados": 0,
+    "ultimaActualizacionUso": {
+      "$date": "2025-09-04T17:12:15.137Z"
+    }
+  },
+  "renovacionAutomatica": {
+    "activa": true,
+    "intentos": 0,
+    "ultimoIntento": null
+  },
+  "motivoCancelacion": {
+    "descripcion": null,
+    "fechaCancelacion": null
+  },
+  "metadata": {
+    "ip": "payment-capture",
+    "userAgent": "PayPal-Capture",
+    "codigoPromocional": null,
+    "origenRegistro": "payment_capture"
+  },
+  "createdAt": {
+    "$date": "2025-08-21T20:47:12.434Z"
+  },
+  "updatedAt": {
+    "$date": "2025-09-04T17:12:15.138Z"
+  }
+}

@@ -1,0 +1,19 @@
+fastapi
+uvicorn[standard]
+httpx
+pytz
+babel
+pydantic
+google-genai
+python-dotenv
+requests
+pycryptodome
+pymupdf
+
+
+fastapi
+uvicorn[standard] # Incluye optimizaciones y soporte websocket si es necesario
+requests
+pycryptodome
+google-generativeai
+python-dotenv

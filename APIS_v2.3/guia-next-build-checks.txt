@@ -1,0 +1,101 @@
+Guía para detectar todos los errores antes de hacer build en Next.js
+===============================================================
+
+1) Scripts recomendados
+-----------------------
+Agrega en tu package.json (usando pnpm):
+
+"scripts": {
+  "check:types": "tsc --noEmit --pretty false",
+  "check:types:js": "tsc --noEmit --pretty false --allowJs --checkJs",
+  "check:lint": "eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=0",
+  "check:imports": "tsc --noEmit --pretty false && ts-prune --ignore @pages/**,@app/** || true",
+  "check:circles": "madge --ts-config tsconfig.json --extensions ts,tsx,js,jsx --circular .",
+  "check:deps": "pnpm dedupe && pnpm dlx npm-check-updates -u",
+  "check:env": "node ./scripts/validate-env.mjs",
+  "check": "run-p check:*",
+  "build": "next build"
+}
+
+Dependencias dev necesarias:
+pnpm add -D typescript @types/node @types/react @types/react-dom eslint eslint-config-next @typescript-eslint/parser @typescript-eslint/eslint-plugin eslint-plugin-import eslint-plugin-unused-imports ts-prune madge npm-run-all
+
+---------------------------------------------------------------
+
+2) Ajustes de Next.js
+---------------------
+En next.config.js:
+
+const nextConfig = {
+  typescript: { ignoreBuildErrors: false },
+  eslint: { ignoreDuringBuilds: false }
+};
+export default nextConfig;
+
+---------------------------------------------------------------
+
+3) Configuración estricta de TypeScript y ESLint
+------------------------------------------------
+Ejemplo de tsconfig.json:
+
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "importsNotUsedAsValues": "error",
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  }
+}
+
+Ejemplo de .eslintrc.cjs:
+
+module.exports = {
+  root: true,
+  extends: ["next/core-web-vitals"],
+  parser: "@typescript-eslint/parser",
+  plugins: ["@typescript-eslint", "import", "unused-imports"],
+  rules: {
+    "no-undef": "error",
+    "unused-imports/no-unused-imports": "error",
+    "import/no-unresolved": "error",
+    "import/no-duplicates": "error"
+  }
+};
+
+---------------------------------------------------------------
+
+4) Validar variables de entorno
+-------------------------------
+Crea scripts/validate-env.mjs:
+
+import { z } from 'zod';
+
+const EnvSchema = z.object({
+  NEXT_PUBLIC_API_URL: z.string().url(),
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development')
+});
+
+const result = EnvSchema.safeParse(process.env);
+if (!result.success) {
+  console.error('❌ ENV inválidas:\n', result.error.format());
+  process.exit(1);
+} else {
+  console.log('✅ ENV OK');
+}
+
+---------------------------------------------------------------
+
+5) Flujo recomendado
+--------------------
+1. Ejecuta: pnpm run check
+   - Lista todos los errores de tipos, lint, imports, deps y env.
+2. Corrige lo que aparezca.
+3. Ejecuta: pnpm run build
+4. Si falla, usa: next build --debug
+5. Repite hasta que build sea exitoso.
+
+===============================================================
