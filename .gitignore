@@ -3,3 +3,5 @@ __pycache__/
 .env
 Download/
 .vscode/
+APIS_v2.3/
+extraermedia-api/
