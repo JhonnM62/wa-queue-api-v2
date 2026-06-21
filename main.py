@@ -10,7 +10,8 @@ import time
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from dotenv import load_dotenv # Para cargar variables de .env
@@ -130,6 +131,8 @@ class MessageRequest(BaseModel):
     thinking_budget: int = Field(0, description="Thinking budget for Gemini 2.5/3.0 models: -1 to enable reasoning, 0 to disable.")
     thinking_level: str = Field("HIGH", description="Thinking level for Gemini 3.0 models: MINIMAL, LOW, DEFAULT, HIGH")
     media_resolution: str = Field("MEDIA_RESOLUTION_HIGH", description="Media resolution: LOW, DEFAULT, HIGH")
+    use_google_search: bool = Field(False, description="Activar búsqueda en Google")
+    use_google_maps: bool = Field(False, description="Activar búsqueda en Google Maps")
 
     # Parámetros para construcción dinámica de prompt con estados
     estados_generales: Optional[str] = Field(None, description="String con contenido de estados generales para incluir en el prompt")
@@ -172,6 +175,13 @@ class GetHistoryRequest(BaseModel):
     )
 
 app = FastAPI(title="WhatsApp Message Processor", version="1.2.31_gemini_thinking_config_v2")
+
+from routers.auth_routes import router as auth_router
+from routers.bots_routes import router as bots_router
+
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(bots_router, prefix="/api/bots", tags=["bots"])
+
 processing_tasks: Dict[str, Dict[str, Any]] = {}
 contact_pause_state_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
 # Cache para control de notificaciones duplicadas: { "userbot_phone": { "last_state": "...", "timestamp": 1234567890 } }
@@ -313,17 +323,25 @@ async def get_latest_control_reaction_timestamps_and_push_name(userbot: str, tok
             response = await client.get(reaction_check_url_val, headers=headers, timeout=15.0)
             response.raise_for_status()
             response_data = response.json()
+            # DEBUG LOG TO VERIFY FULL RESPONSE DATA:
+            print(f"{log_prefix} DEBUG BAILEYS RESPONSE: Tipo: {type(response_data)}, Tiene 'data': {'data' in response_data}")
             if isinstance(response_data, dict) and 'data' in response_data and isinstance(response_data['data'], list):
+                print(f"{log_prefix} DEBUG BAILEYS RESPONSE: Mensajes devueltos por la API: {len(response_data['data'])}")
                 for msg in response_data['data']:
                     try:
+                        # DEBUG LOG TO SEE EVERY MESSAGE
+                        key_info = msg.get('key', {})
+                        from_me = key_info.get('fromMe', 'NO_KEY')
+                        push_name_raw = msg.get('pushName', '')
+                        print(f"{log_prefix} DEBUG MSG: fromMe={from_me}, pushName_raw='{push_name_raw}'")
+
                         # Extraer pushName de mensajes del usuario (fromMe=false)
-                        if not user_push_name and not msg.get('key', {}).get('fromMe', False):
-                            push_name_raw = msg.get('pushName', '')
-                            if push_name_raw:
+                        if not key_info.get('fromMe', False):
+                            if not user_push_name and push_name_raw:
                                 cleaned_push_name = extract_valid_push_name(push_name_raw)
                                 if cleaned_push_name:
                                     user_push_name = cleaned_push_name
-                                    print(f"{log_prefix} PushName extraído: '{user_push_name}' (original: '{push_name_raw}')")
+                                    print(f"{log_prefix} PushName extraído exitosamente: '{user_push_name}' (original: '{push_name_raw}')")
 
                         # Procesar reacciones de control
                         if 'message' in msg and 'reactionMessage' in msg['message']:
@@ -748,7 +766,9 @@ def _call_gemini_sdk_sync(
     thinking_budget: int = 0,  # Nuevo parámetro para thinking_config
     thinking_level: str = "HIGH", # Nuevo parámetro para Gemini 3.0
     media_resolution: str = "MEDIA_RESOLUTION_HIGH", # Nuevo parámetro para Gemini 3.0
-    user_push_name: str = ""  # Nuevo parámetro para el pushName del usuario
+    user_push_name: str = "",  # Nuevo parámetro para el pushName del usuario
+    use_google_search: bool = False,
+    use_google_maps: bool = False
 ):
     # Esta función ahora es puramente síncrona y no contiene lógica de reintentos ni asyncio.
     # Los errores se propagan hacia arriba.
@@ -784,6 +804,18 @@ def _call_gemini_sdk_sync(
         system_instruction=[genai_types.Part.from_text(text=system_instruction_text)]
     )
 
+    sdk_tools = []
+    if use_google_search:
+        print(f"{log_prefix_outer} [TOOLS] Habilitando Búsqueda en Google")
+        sdk_tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch()))
+        if use_google_maps:
+            print(f"{log_prefix_outer} [TOOLS-WARN] Se solicitaron Google Search y Google Maps. La API no permite combinarlos. Se priorizará Google Search.")
+    elif use_google_maps:
+        print(f"{log_prefix_outer} [TOOLS] Habilitando Google Maps")
+        sdk_tools.append(genai_types.Tool(google_maps=genai_types.GoogleMaps()))
+    if sdk_tools:
+        final_sdk_config.tools = sdk_tools
+
     # Agregar media_resolution
     if "gemini-3" in model_to_use:
         try:
@@ -815,22 +847,21 @@ def _call_gemini_sdk_sync(
             level_to_use = thinking_level if thinking_level else "HIGH"
 
             print(f"{log_prefix_outer} Aplicando thinking_config con level {level_to_use} para modelo compatible: {model_to_use}")
-
             # ATENCIÓN: Pydantic falla si se envía `thinking_budget` en modelos 3.0.
             # Por eso SOLO enviamos thinking_level en kwargs explícitos para no enviar defaults accidentales
-            final_sdk_config.thinking_config = genai_types.ThinkingConfig(thinking_level=level_to_use)
+            final_sdk_config.thinking_config = genai_types.ThinkingConfig(
+                thinking_level=level_to_use
+            )
         else:
-            # Para modelos Gemini 2.x
-            print(f"{log_prefix_outer} Aplicando thinking_config con budget {thinking_budget} para modelo compatible: {model_to_use}")
+            # Modelos 2.0 / 2.5 usan thinking_budget numérico
+            if thinking_budget and thinking_budget != 0:
+                print(f"{log_prefix_outer} Aplicando thinking_config con budget {thinking_budget} para modelo compatible: {model_to_use}")
+                final_sdk_config.thinking_config = genai_types.ThinkingConfig(
+                    thinking_budget=thinking_budget
+                )
 
-            # Solo enviamos el budget si no es 0 (0 significa desactivado)
-            if thinking_budget != 0:
-                final_sdk_config.thinking_config = genai_types.ThinkingConfig(thinking_budget=thinking_budget)
-    else:
-        print(f"{log_prefix_outer} Modelo {model_to_use} no compatible con thinking_config. No se aplicará thinking_budget/level.")
-
-    response_stream_obj = None
     stream_text_parts = []
+    response_stream_obj = None
 
     for chunk_response in sdk_client.models.generate_content_stream(
         model=model_to_use,
@@ -845,6 +876,17 @@ def _call_gemini_sdk_sync(
         raise Exception(f"[{log_prefix_outer}] Gemini SDK stream returned no response object / was empty for model {model_to_use}.")
 
     final_text_output_from_api = "".join(stream_text_parts)
+
+    if hasattr(response_stream_obj, 'candidates') and response_stream_obj.candidates:
+        candidate = response_stream_obj.candidates[0]
+        if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+            print(f"{log_prefix_outer} [TOOLS-SUCCESS] Metadata de Grounding detectada! El modelo buscó en Google u obtuvo datos externos.")
+            # Opcionalmente imprimir los chunks usados:
+            if hasattr(candidate.grounding_metadata, 'grounding_chunks'):
+                print(f"{log_prefix_outer} [TOOLS-CHUNKS] Se usaron {len(candidate.grounding_metadata.grounding_chunks)} fuentes.")
+        else:
+            if sdk_tools:
+                print(f"{log_prefix_outer} [TOOLS-INFO] Las herramientas estaban habilitadas, pero el modelo NO hizo uso de ellas para esta consulta.")
 
     if response_stream_obj.prompt_feedback and response_stream_obj.prompt_feedback.block_reason:
         block_reason_name_str = response_stream_obj.prompt_feedback.block_reason.name
@@ -1118,7 +1160,9 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                     0 if "gemini-3" in current_model_sdk else getattr(req, 'thinking_budget', -1),
                     getattr(req, 'thinking_level', 'HIGH'),
                     getattr(req, 'media_resolution', 'MEDIA_RESOLUTION_HIGH'),
-                    user_push_name  # Pasar el pushName a _call_gemini_sdk_sync
+                    user_push_name,  # Pasar el pushName a _call_gemini_sdk_sync
+                    getattr(req, 'use_google_search', False),
+                    getattr(req, 'use_google_maps', False)
                 )
 
                 print(f"{log_prefix} [RAW OUTPUT FROM SDK - MODEL: {current_model_sdk}]:\n{raw_text_from_gemini}\n")
@@ -1524,7 +1568,7 @@ async def extract_order_info_with_ai(userbot: str, phone: str, apikey: str, mode
                 current_model,
                 0.1, 0.95, 65536,
                 f"[{userbot}/{phone}/extract]",
-                "UTC", "UTC", "", 0, "HIGH", "MEDIA_RESOLUTION_HIGH", ""
+                "UTC", "UTC", "", 0, "HIGH", "MEDIA_RESOLUTION_HIGH", "", False, False
             )
             
             cleaned = raw_text.strip()
@@ -2661,6 +2705,27 @@ async def dashboard():
     </html>
     """
     return HTMLResponse(content=html_content)
+
+@app.get("/panel")
+async def serve_panel():
+    return FileResponse("frontend/dist/index.html")
+
+
+# Opcional: Montar assets
+if os.path.exists("frontend/dist/assets"):
+    app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
+
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse("frontend/dist/favicon.svg")
+
+from fastapi import Request
+
+@app.get("/{full_path:path}")
+async def serve_spa(request: Request, full_path: str):
+    if full_path.startswith("api/") or full_path.startswith("assets/") or full_path == "dashboard":
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse("frontend/dist/index.html")
 
 if __name__ == "__main__":
     import uvicorn

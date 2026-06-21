@@ -5,3 +5,9 @@ Download/
 .vscode/
 APIS_v2.3/
 extraermedia-api/
+saas_data.db
+chroma_db/
+logs.txt
+scratch/
+.agents/
+temp_uploads/
