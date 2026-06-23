@@ -24,7 +24,16 @@ def create_bot(
         models.BotConfig.userbot_identifier == bot.userbot_identifier
     ).first()
     if db_bot:
-        raise HTTPException(status_code=400, detail="Bot identifier already registered")
+        if db_bot.user_id is None:
+            # Reclamar bot huérfano
+            db_bot.user_id = current_user.id
+            for field, value in bot.model_dump(exclude_unset=True).items():
+                setattr(db_bot, field, value)
+            db.commit()
+            db.refresh(db_bot)
+            return db_bot
+        else:
+            raise HTTPException(status_code=400, detail="Bot identifier already registered")
 
     new_bot = models.BotConfig(user_id=current_user.id, **bot.model_dump())
     db.add(new_bot)
