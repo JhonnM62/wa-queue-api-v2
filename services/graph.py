@@ -56,14 +56,19 @@ class ChatbotResponse(BaseModel):
 # ── Nodo del agente ───────────────────────────────────────────────────────────
 
 INSTRUCCIONES_JSON = (
-    "IMPORTANTE: Cuando respondas al usuario, DEBES responder estrictamente "
-    "en formato JSON válido con la siguiente estructura:\n"
+    "REGLAS DE BÚSQUEDA Y HERRAMIENTAS:\n"
+    "Si el usuario pregunta por información en tiempo real, eventos recientes, el clima, noticias, "
+    "horarios o cualquier dato que requiera buscar en internet, DEBES usar la herramienta de búsqueda de Google ANTES de generar tu respuesta final.\n"
+    "Mientras uses herramientas, NO respondas en formato JSON todavía. Simplemente invoca la herramienta necesaria.\n\n"
+    "RESPUESTA FINAL AL USUARIO:\n"
+    "Solo cuando hayas obtenido la información de las herramientas (o si no fue necesario usarlas), "
+    "debes dar tu respuesta FINAL ÚNICAMENTE en formato JSON válido con la siguiente estructura estricta:\n"
     "{\n"
     '  "estado_conversacion": "Saludo|Pedido|Cierre|Ayuda",\n'
     '  "respuesta_cliente": "Tu mensaje aquí...",\n'
     '  "accion_interna": "NINGUNA|NOTIFICAR|PAUSAR"\n'
     "}\n"
-    "No incluyas markdown (```json) ni texto fuera del JSON."
+    "Asegúrate de que la salida sea ÚNICAMENTE el JSON, sin bloques de código markdown ni texto adicional."
 )
 
 

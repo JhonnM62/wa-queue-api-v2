@@ -28,7 +28,7 @@ class BotConfigBase(BaseModel):
     system_prompt: Optional[str] = ""
     ai_model: Optional[str] = "gemini-2.5-flash"
     thinking_budget: Optional[int] = -1
-    thinking_level: Optional[str] = "HIGH"
+    thinking_level: Optional[str] = "LOW"
     use_google_search: Optional[bool] = False
     use_google_maps: Optional[bool] = False
     is_active: Optional[bool] = True

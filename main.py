@@ -1958,58 +1958,108 @@ async def extract_order_info_with_ai(userbot: str, phone: str, apikey: str, mode
     return None
 
 
-async def delayed_processing_task(task_key: str):
-    if task_key not in processing_tasks:
-        return
-    task_info = processing_tasks[task_key]
-    current_task_req_info: MessageRequest = task_info['original_request']
+async def delayed_processing_task(task_key: str, current_task_req_info: MessageRequest):
     log_prefix = f"[{current_task_req_info.userbot}/{current_task_req_info.lineaWA}]"
 
     try:
         t_before_delay = time.time()
-        print(f"{log_prefix} Iniciando retraso de {current_task_req_info.delay_seconds}s para tarea {task_key}...", flush=True)
-        push_name_log = task_info.get('user_push_name', current_task_req_info.userbot)
-        print(f"{log_prefix} Procesando en: {current_task_req_info.delay_seconds} el de {push_name_log}", flush=True)
-        await asyncio.sleep(current_task_req_info.delay_seconds)
+        
+        # Realizar llamada bloqueante a Baileys de forma asíncrona pero EN BACKGROUND
+        t0_baileys = time.time()
+        latest_pause_ts_ms, latest_unpause_ts_ms, user_push_name = await get_latest_control_reaction_timestamps_and_push_name(
+            current_task_req_info.userbot, current_task_req_info.token, current_task_req_info.lineaWA, current_task_req_info.server
+        )
+        t1_baileys = time.time()
+        print(f"{log_prefix} [TIMING] get_latest_control_reaction en background tardó {t1_baileys - t0_baileys:.2f}s", flush=True)
 
         if task_key not in processing_tasks or processing_tasks[task_key]['task'] is not asyncio.current_task():
-            print(
-                f"{log_prefix} Tarea {task_key} (esta instancia) fue cancelada o reemplazada. Abortando.")
             return
+            
+        processing_tasks[task_key]['user_push_name'] = user_push_name
 
-        current_state_after_delay = load_contact_state(
-            current_task_req_info.userbot, current_task_req_info.lineaWA)
-        if is_contact_paused(current_state_after_delay, current_task_req_info.pause_timeout_minutes):
-            print(
-                f"{log_prefix} Contacto PAUSADO detectado después del retraso para tarea {task_key}.")
+        current_state = processing_tasks[task_key].get('state_snapshot', {})
+        was_previously_paused = processing_tasks[task_key].get('was_paused_snapshot', False)
+        new_state_determined = current_state.copy()
+        
+        last_ctl_react_ts_in_state = current_state.get("last_control_reaction_timestamp", 0)
+        abs_latest_ctl_ts_from_api = max(latest_pause_ts_ms, latest_unpause_ts_ms)
+        state_changed_by_reaction_or_timeout = False
+
+        if abs_latest_ctl_ts_from_api > 0 and abs_latest_ctl_ts_from_api > last_ctl_react_ts_in_state:
+            print(f"{log_prefix} Nueva reacción de control detectada.")
+            if latest_unpause_ts_ms > latest_pause_ts_ms:
+                if new_state_determined.get("is_paused"):
+                    state_changed_by_reaction_or_timeout = True
+                new_state_determined["is_paused"] = False
+                new_state_determined["pause_start_time"] = None
+                new_state_determined["last_control_reaction_timestamp"] = latest_unpause_ts_ms
+                print(f"{log_prefix} Despausando por reacción ✅.")
+            else:
+                state_changed_by_reaction_or_timeout = True
+                now_iso = datetime.now(dt_timezone.utc).isoformat()
+                new_state_determined["pause_start_time"] = now_iso
+                new_state_determined["last_message_timestamp_during_pause_ms"] = int(time.time() * 1000)
+                new_state_determined["is_paused"] = True
+                new_state_determined["last_control_reaction_timestamp"] = latest_pause_ts_ms
+                print(f"{log_prefix} Pausando por reacción ✋.")
+
+        if new_state_determined.get("is_paused") and new_state_determined.get("pause_start_time") and current_task_req_info.pause_timeout_minutes > 0:
+            try:
+                pause_start_dt = datetime.fromisoformat(new_state_determined["pause_start_time"])
+                if pause_start_dt.tzinfo is None:
+                    pause_start_dt = pause_start_dt.replace(tzinfo=dt_timezone.utc)
+                if datetime.now(dt_timezone.utc) - pause_start_dt > timedelta(minutes=current_task_req_info.pause_timeout_minutes):
+                    if new_state_determined.get("is_paused"):
+                        new_state_determined["is_paused"] = False
+                        new_state_determined["pause_start_time"] = None
+                        state_changed_by_reaction_or_timeout = True
+                        print(f"{log_prefix} Despausando por timeout.")
+            except Exception as e:
+                print(f"{log_prefix} Error procesando timeout de pausa: {e}")
+
+        if state_changed_by_reaction_or_timeout or new_state_determined != current_state:
+            save_contact_state(current_task_req_info.userbot, current_task_req_info.lineaWA, new_state_determined)
+            current_state = new_state_determined
+
+        is_truly_paused_now = is_contact_paused(current_state, current_task_req_info.pause_timeout_minutes)
+        if was_previously_paused and not is_truly_paused_now:
+            print(f"{log_prefix} Contacto despausado. Sincronizando historial de pausa final.")
             await append_paused_history(current_task_req_info)
+
+        if is_truly_paused_now:
+            print(f"{log_prefix} Contacto está PAUSADO. Abortando procesamiento de IA para tratarlo como mensaje pausado.")
+            await append_paused_history(current_task_req_info)
+            if task_key in processing_tasks:
+                del processing_tasks[task_key]
             return
 
-        print(
-            f"{log_prefix} Contacto NO pausado para tarea {task_key}. Procesando mensaje normalmente.")
+        # Esperar el remanente del tiempo si queda
+        elapsed = time.time() - t_before_delay
+        remaining_delay = max(0.0, current_task_req_info.delay_seconds - elapsed)
+        
+        if remaining_delay > 0:
+            print(f"{log_prefix} Iniciando retraso restante de {remaining_delay:.1f}s para concatenación...", flush=True)
+            await asyncio.sleep(remaining_delay)
 
         if task_key not in processing_tasks or processing_tasks[task_key]['task'] is not asyncio.current_task():
-            print(
-                f"{log_prefix} Tarea {task_key} (esta instancia) desactualizada post-sincronización. Abortando.")
             return
 
-        task_info = processing_tasks[task_key]
-        actual_fragments = [f.strip()
-                            for f in task_info['fragments'] if f.strip()]
-        # Obtener el pushName almacenado
-        user_push_name = task_info.get('user_push_name', '')
+        task_info = processing_tasks.pop(task_key, None)
+        if not task_info:
+            return
+
+        actual_fragments = [f.strip() for f in task_info['fragments'] if f.strip()]
+        user_push_name = task_info.get('user_push_name', current_task_req_info.userbot)
 
         if not actual_fragments:
-            print(
-                f"{log_prefix} Tarea {task_key}: No hay fragmentos válidos para enviar a la IA.")
+            print(f"{log_prefix} Tarea {task_key}: No hay fragmentos válidos para enviar a la IA.")
             return
 
-        print(f"{log_prefix} Tarea {task_key}: Retraso completado. Fragmentos: {actual_fragments}. Procesando...")
-        # No se pasa ai_model aquí, ya que process_message_final usa req.ai_model y la lista de fallback
+        print(f"{log_prefix} Tarea {task_key}: Retraso completado. Procesando...")
         ai_response = await process_message_final(
             current_task_req_info, actual_fragments,
             current_task_req_info.pais, current_task_req_info.idioma,
-            user_push_name  # Pasar el pushName a process_message_final
+            user_push_name
         )
 
         if ai_response and isinstance(ai_response, dict):
@@ -2326,48 +2376,38 @@ async def handle_incoming_message(req: MessageRequest):
                 print(f"{log_prefix} ADVERTENCIA: thinking_budget={req.thinking_budget} especificado pero modelo {req.ai_model} no es compatible. Se ignorará el parámetro.")
 
     current_state = load_contact_state(userbot, phone)
-    was_previously_paused = is_contact_paused(
-        current_state, req.pause_timeout_minutes)
+    was_previously_paused = is_contact_paused(current_state, req.pause_timeout_minutes)
 
-    # Obtener timestamps de reacciones de control Y el pushName del usuario
-    t0_baileys = time.time()
-    latest_pause_ts_ms, latest_unpause_ts_ms, user_push_name = await get_latest_control_reaction_timestamps_and_push_name(userbot, req.token, phone, req.server)
-    t1_baileys = time.time()
-    print(f"{log_prefix} [TIMING] get_latest_control_reaction... tardó {t1_baileys - t0_baileys:.2f}s", flush=True)
+    # 1) Añadimos fragmento
+    if task_key in processing_tasks:
+        task_info = processing_tasks[task_key]
+        if new_fragment:
+            task_info['fragments'].append(new_fragment)
+        task_to_cancel = task_info.get('task')
+        if task_to_cancel and not task_to_cancel.done():
+            task_to_cancel.cancel()
+    else:
+        processing_tasks[task_key] = {
+            'fragments': [new_fragment] if new_fragment else [],
+            'user_push_name': '',
+        }
 
-    new_state_determined = current_state.copy()
-    last_ctl_react_ts_in_state = current_state.get(
-        "last_control_reaction_timestamp", 0)
-    abs_latest_ctl_ts_from_api = max(latest_pause_ts_ms, latest_unpause_ts_ms)
-    state_changed_by_reaction_or_timeout = False
+    # 2) Guardar snapshot para procesarlo en la tarea de fondo
+    task_req_info = req
+    processing_tasks[task_key]['original_request'] = task_req_info
+    processing_tasks[task_key]['state_snapshot'] = current_state.copy()
+    processing_tasks[task_key]['was_paused_snapshot'] = was_previously_paused
 
-    if abs_latest_ctl_ts_from_api > 0 and abs_latest_ctl_ts_from_api > last_ctl_react_ts_in_state:
-        print(f"{log_prefix} Nueva reacción de control detectada.")
-        if latest_unpause_ts_ms > latest_pause_ts_ms:
-            if new_state_determined["is_paused"]:
-                state_changed_by_reaction_or_timeout = True
-            new_state_determined["is_paused"] = False
-            new_state_determined["pause_start_time"] = None
-            new_state_determined["last_control_reaction_timestamp"] = latest_unpause_ts_ms
-            print(f"{log_prefix} Despausando por reacción ✅.")
-        else:
-            # SIEMPRE reiniciar el timer de pausa cuando hay una nueva reacción ✋,
-            # incluso si ya estaba "pausado" teóricamente
-            state_changed_by_reaction_or_timeout = True
-            now_iso = datetime.now(dt_timezone.utc).isoformat()
-            new_state_determined["pause_start_time"] = now_iso
-            new_state_determined["last_message_timestamp_during_pause_ms"] = int(
-                datetime.fromisoformat(now_iso).timestamp() * 1000)
+    # 3) Lanzamos tarea asíncrona
+    processing_tasks[task_key]['task'] = asyncio.create_task(
+        delayed_processing_task(task_key, task_req_info)
+    )
 
-            new_state_determined["is_paused"] = True
-            new_state_determined["last_control_reaction_timestamp"] = latest_pause_ts_ms
-            print(f"{log_prefix} Pausando por reacción ✋.")
+    elapsed_time = time.time() - req_start_time
+    print(
+        f"{log_prefix} ⚡ Webhook procesado súper rápido en {elapsed_time:.3f}s. Tarea encolada devolviendo 200 OK.")
 
-    if new_state_determined["is_paused"] and new_state_determined["pause_start_time"] and req.pause_timeout_minutes > 0:
-        try:
-            pause_start_dt = datetime.fromisoformat(
-                new_state_determined["pause_start_time"])
-            if pause_start_dt.tzinfo is None:
+    return {"status": "processing_started", "task_key": task_key}
                 pause_start_dt = pause_start_dt.replace(tzinfo=dt_timezone.utc)
             if datetime.now(dt_timezone.utc) - pause_start_dt > timedelta(minutes=req.pause_timeout_minutes):
                 if new_state_determined["is_paused"]:
