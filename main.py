@@ -1844,6 +1844,43 @@ async def handle_incoming_message(req: MessageRequest):
     if missing_or_empty_fields:
         raise HTTPException(status_code=400, detail=f"Campos requeridos faltantes o vacíos: {', '.join(missing_or_empty_fields)}")
 
+    # === AUTO-GUARDADO DE BOT EN BASE DE DATOS ===
+    try:
+        from core.database import SessionLocal
+        from models import bot_models
+        db = SessionLocal()
+        db_bot = db.query(bot_models.BotConfig).filter(bot_models.BotConfig.userbot_identifier == userbot).first()
+        if not db_bot:
+            # Buscar el primer usuario (generalmente el admin creado con create_admin.py)
+            first_user = db.query(bot_models.User).first()
+            if first_user:
+                new_bot = bot_models.BotConfig(
+                    user_id=first_user.id,
+                    userbot_identifier=userbot,
+                    apikey=req.apikey,
+                    system_prompt=req.promt,
+                    ai_model=req.ai_model,
+                    thinking_budget=getattr(req, 'thinking_budget', -1),
+                    thinking_level=getattr(req, 'thinking_level', 'HIGH'),
+                    pais=req.pais,
+                    idioma=req.idioma,
+                    delay_seconds=req.delay_seconds,
+                    pause_timeout_minutes=req.pause_timeout_minutes,
+                    activarnotificacion=req.activarnotificacion,
+                    estado_notificacion=req.estado,
+                    lineaogruponotificacion=req.lineaogruponotificacion,
+                    activaruserbotopcional=req.activaruserbotopcional,
+                    userbotopcional=req.userbotopcional
+                )
+                db.add(new_bot)
+                db.commit()
+                print(f"{log_prefix} 🤖 [Auto-Save] Nueva configuración de bot guardada en SQLite para el ID: {userbot}")
+            else:
+                print(f"{log_prefix} ⚠️ [Auto-Save] No se pudo guardar el bot porque no existe ningún usuario en la BD.")
+        db.close()
+    except Exception as e:
+        print(f"{log_prefix} ❌ Error en auto-guardado de BD: {e}")
+
     # Validaciones estrictas de compatibilidad de parámetros por modelo
     is_gemini_3 = "gemini-3" in req.ai_model
 
