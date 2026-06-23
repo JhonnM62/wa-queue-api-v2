@@ -1708,10 +1708,14 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
 
 
 async def send_whatsapp(server: str, userbot: str, token: str, phone: str, payload: Dict[str, Any]):
+    import time
+    t0_send = time.time()
+    log_prefix = f"[{userbot}/{phone}]"
+    print(f"{log_prefix} [TIMING] Iniciando envío de mensajes a WhatsApp...", flush=True)
+
     present_url = f"{server}/chats/send-presence?id={userbot}"
     send_url = f"{server}/chats/send?id={userbot}"
     headers = {"Content-Type": "application/json", "x-access-token": token}
-    log_prefix = f"[{userbot}/{phone}]"
     if not isinstance(payload, dict) or not all(k.isdigit() for k in payload.keys()):
         print(f"{log_prefix} Error: Payload to send_whatsapp debe ser dict con claves numéricas. Payload: {payload}")
         return
@@ -1801,6 +1805,8 @@ async def send_whatsapp(server: str, userbot: str, token: str, phone: str, paylo
             except Exception as e_send:
                 print(
                     f"{log_prefix} Error sending message type '{tipo}' (key {key}): {e_send}")
+        t1_send = time.time()
+        print(f"{log_prefix} [TIMING] ⏱️ send_whatsapp() terminó en {t1_send - t0_send:.2f} segundos.", flush=True)
         try:
             await client.post(present_url, headers=headers, json={**body_base, "presence": "paused"}, timeout=10.0)
         except Exception as e_final_pres:
@@ -1960,9 +1966,10 @@ async def delayed_processing_task(task_key: str):
     log_prefix = f"[{current_task_req_info.userbot}/{current_task_req_info.lineaWA}]"
 
     try:
+        t_before_delay = time.time()
         print(f"{log_prefix} Iniciando retraso de {current_task_req_info.delay_seconds}s para tarea {task_key}...", flush=True)
         push_name_log = task_info.get('user_push_name', current_task_req_info.userbot)
-        print(f"{log_prefix} Procesando en: {current_task_req_info.delay_seconds} el de {push_name_log}")
+        print(f"{log_prefix} Procesando en: {current_task_req_info.delay_seconds} el de {push_name_log}", flush=True)
         await asyncio.sleep(current_task_req_info.delay_seconds)
 
         if task_key not in processing_tasks or processing_tasks[task_key]['task'] is not asyncio.current_task():
@@ -2223,6 +2230,8 @@ async def delayed_processing_task(task_key: str):
 
 @app.post("/wa/process")
 async def handle_incoming_message(req: MessageRequest):
+    import time
+    req_start_time = time.time()
     phone, userbot = req.lineaWA, req.userbot
     if getattr(req, "activaruserbotopcional", False) and getattr(req, "userbotopcional", None):
         userbot = req.userbotopcional.strip()
@@ -2321,7 +2330,10 @@ async def handle_incoming_message(req: MessageRequest):
         current_state, req.pause_timeout_minutes)
 
     # Obtener timestamps de reacciones de control Y el pushName del usuario
+    t0_baileys = time.time()
     latest_pause_ts_ms, latest_unpause_ts_ms, user_push_name = await get_latest_control_reaction_timestamps_and_push_name(userbot, req.token, phone, req.server)
+    t1_baileys = time.time()
+    print(f"{log_prefix} [TIMING] get_latest_control_reaction... tardó {t1_baileys - t0_baileys:.2f}s", flush=True)
 
     new_state_determined = current_state.copy()
     last_ctl_react_ts_in_state = current_state.get(

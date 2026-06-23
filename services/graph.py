@@ -308,12 +308,28 @@ def process_message_with_graph(
             "config_dict": config_dict
         }
     }
+    import time
+    start_time = time.time()
+    print(f"[{bot_id}/{phone}] [TIMING] Iniciando app_graph.stream() en LangGraph...", flush=True)
+    
     for event in app_graph.stream(input_state, stream_mode="values", config=config):
         last_message = event["messages"][-1]
+
+    end_time = time.time()
+    elapsed = end_time - start_time
+    print(f"[{bot_id}/{phone}] [TIMING] ⏱️ app_graph.stream() terminó en {elapsed:.2f} segundos.", flush=True)
 
     if not last_message:
         return "{}"
         
+    # Extraer metadata de grounding_metadata si usó Google Search
+    try:
+        rm = last_message.response_metadata
+        if "grounding_metadata" in rm or (hasattr(last_message, "additional_kwargs") and "grounding_metadata" in last_message.additional_kwargs):
+            print(f"[{bot_id}/{phone}] 🔍 INFO: El modelo usó Google Search para esta respuesta.")
+    except Exception:
+        pass
+
     content = last_message.content
     if isinstance(content, list):
         text_blocks = [blk["text"] for blk in content if isinstance(blk, dict) and "text" in blk]
