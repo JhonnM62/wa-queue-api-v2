@@ -171,7 +171,7 @@ def call_model(state: AgentState):
                     "function_calling_config": {"mode": "AUTO"},
                     "include_server_side_tool_invocations": True
                 }
-                llm_with_tools = llm.bind_tools(available_tools, tool_config=gemini_tool_config)
+                llm_with_tools = llm.bind_tools(available_tools, **{"tool_config": gemini_tool_config})
             else:
                 llm_with_tools = llm.bind_tools(available_tools) if available_tools else llm
             

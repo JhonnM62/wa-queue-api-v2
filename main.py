@@ -914,8 +914,12 @@ def _call_gemini_sdk_sync(
     return final_text_output_from_api
 
 async def process_message_final(req: MessageRequest, message_fragments: List[str], pais: str, idioma: str, user_push_name: str = '') -> Optional[Dict[str, Any]]:
-    # El parámetro ai_model de la función ya no se usa directamente aquí, se toma de req.ai_model para la lista inicial
-    phone, userbot = req.lineaWA, req.userbot
+    # Extraer los datos y limpiarlos de espacios en blanco
+    phone = req.lineaWA.strip() if req.lineaWA else None
+    userbot = req.userbot.strip() if req.userbot else None
+    if getattr(req, "activaruserbotopcional", False) and getattr(req, "userbotopcional", None):
+        userbot = req.userbotopcional.strip()
+        
     log_prefix = f"[{userbot}/{phone}]"
 
     base_text_from_fragments = ", ".join(message_fragments).strip()
@@ -1887,6 +1891,9 @@ async def delayed_processing_task(task_key: str):
 @app.post("/wa/process")
 async def handle_incoming_message(req: MessageRequest):
     phone, userbot = req.lineaWA, req.userbot
+    if getattr(req, "activaruserbotopcional", False) and getattr(req, "userbotopcional", None):
+        userbot = req.userbotopcional.strip()
+
     new_fragment = req.mensaje_reciente.strip() if req.mensaje_reciente and isinstance(req.mensaje_reciente, str) else ""
     task_key = f"{userbot}_{phone}"
     log_prefix = f"[{userbot}/{phone}]"
