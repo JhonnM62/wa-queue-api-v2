@@ -282,3 +282,28 @@ cd wa-queue-api-v2
 git pull origin main
 docker restart wa-queue-api-v2.2
 ```
+
+---
+
+## 13. Transferir datos desde Windows al VPS
+
+Si tienes archivos locales (como historiales de conversaciones) y necesitas subirlos al servidor, puedes usar uno de estos dos métodos:
+
+### Método 1: Consola (Rápido, comando `scp`)
+
+Abre PowerShell en tu Windows local y ejecuta:
+
+```powershell
+scp -r "C:\datos empleados\conversaciones_locales\*" root@TU_IP_VPS:/root/wa-queue-api-v2/Download/AutoSystem/
+```
+*(Se te pedirá la contraseña del servidor VPS)*
+
+### Método 2: Interfaz visual (Recomendado)
+
+1. Descarga e instala **WinSCP** en tu Windows.
+2. Conéctate con la IP, usuario `root` y tu contraseña del VPS.
+3. En la ventana izquierda, navega a tu carpeta `C:\datos empleados\conversaciones_locales`.
+4. En la ventana derecha, navega a `/root/wa-queue-api-v2/Download/AutoSystem/`.
+5. Arrastra las carpetas (ej. `historial`, `conf_2`) de izquierda a derecha.
+
+*Nota: Gracias al volumen `$PWD:/app`, cualquier archivo que transfieras a la carpeta del VPS será detectado por el contenedor de Docker de forma instantánea.*
