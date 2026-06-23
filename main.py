@@ -1316,7 +1316,9 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 "userbot_identifier": bot_config.userbot_identifier,
                 "use_google_search": getattr(req, 'use_google_search', False) or bot_config.use_google_search,
                 "use_google_maps": getattr(req, 'use_google_maps', False) or bot_config.use_google_maps,
-                "fallback_models": GEMINI_FALLBACK_MODELS_LIST
+                "fallback_models": GEMINI_FALLBACK_MODELS_LIST,
+                "thinking_level": getattr(req, 'thinking_level', bot_config.thinking_level or 'HIGH'),
+                "thinking_budget": getattr(req, 'thinking_budget', bot_config.thinking_budget or 0)
             }
         db.close()
     except Exception as e:
@@ -1958,7 +1960,7 @@ async def delayed_processing_task(task_key: str):
     log_prefix = f"[{current_task_req_info.userbot}/{current_task_req_info.lineaWA}]"
 
     try:
-        print(f"{log_prefix} Iniciando retraso de {current_task_req_info.delay_seconds}s para tarea {task_key}...")
+        print(f"{log_prefix} Iniciando retraso de {current_task_req_info.delay_seconds}s para tarea {task_key}...", flush=True)
         push_name_log = task_info.get('user_push_name', current_task_req_info.userbot)
         print(f"{log_prefix} Procesando en: {current_task_req_info.delay_seconds} el de {push_name_log}")
         await asyncio.sleep(current_task_req_info.delay_seconds)
@@ -2231,7 +2233,7 @@ async def handle_incoming_message(req: MessageRequest):
     log_prefix = f"[{userbot}/{phone}]"
 
     # 🔧 DEBUG: Imprimir configuración de userbot opcional recibida
-    print(f"{log_prefix} 📨 Request recibido en /wa/process")
+    print(f"{log_prefix} 📨 Request recibido en /wa/process", flush=True)
     print(f"{log_prefix}    - activaruserbotopcional: {req.activaruserbotopcional}")
     print(f"{log_prefix}    - userbotopcional: {req.userbotopcional}")
     print(f"{log_prefix}    - activarnotificacion: {req.activarnotificacion}")
