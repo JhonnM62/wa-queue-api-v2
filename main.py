@@ -1337,7 +1337,8 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 current_prompt_text_for_system_instruction,
                 config_dict,
                 history_list_from_file,
-                user_push_name
+                user_push_name,
+                formatted_dt_prompt
             )
 
             try:
@@ -1958,6 +1959,8 @@ async def delayed_processing_task(task_key: str):
 
     try:
         print(f"{log_prefix} Iniciando retraso de {current_task_req_info.delay_seconds}s para tarea {task_key}...")
+        push_name_log = task_info.get('user_push_name', current_task_req_info.userbot)
+        print(f"{log_prefix} Procesando en: {current_task_req_info.delay_seconds} el de {push_name_log}")
         await asyncio.sleep(current_task_req_info.delay_seconds)
 
         if task_key not in processing_tasks or processing_tasks[task_key]['task'] is not asyncio.current_task():

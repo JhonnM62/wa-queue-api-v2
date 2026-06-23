@@ -263,28 +263,28 @@ def process_message_with_graph(
     system_prompt: str,
     config_dict: Dict[str, Any],
     json_history: Optional[List[Dict[str, Any]]] = None,
-    user_push_name: str = "",
+    user_push_name: str = None,
+    fecha_hora_formateada: str = None
 ) -> str:
     """
-    Procesa un mensaje con LangGraph alimentándolo con el historial
-    completo proveniente de los archivos JSON.
-
-    Parámetros:
-        bot_id       – ID del bot en la BD SaaS.
-        phone        – Número de teléfono del contacto.
-        message      – Mensaje actual del usuario.
-        system_prompt– Prompt del sistema almacenado en BotConfig.
-        config_dict  – Metadatos del bot (api_key, ai_model, tools_config, etc.).
-        json_history – Lista de entradas del historial JSON.  Si es None o []
-                       se procesa sin contexto previo.
+    Punto de entrada principal para procesar un mensaje con LangGraph.
+    
+    - params:
+        bot_id - ID del bot para usarlo en tool configs si es necesario
+        phone - Teléfono del usuario
+        message - Mensaje actual del usuario
+        system_prompt - Prompt del sistema extraído de la BD/configuración
+        config_dict - Diccionario con TODA la configuración del bot (para sacar keys, cx, config de tools, etc.)
+        json_history - Historial de la BD o memoria del webhook
         user_push_name - Nombre (pushName) del usuario en WhatsApp.
+        fecha_hora_formateada - String con la fecha y hora local del usuario.
     """
     # 1. Convertir historial JSON a mensajes LangChain
     history_messages = _json_history_to_lc_messages(json_history or [])
 
     # 2. Agregar el mensaje actual al final, incluyendo el pushName
-    from datetime import datetime
-    fecha_hora_formateada = datetime.now().strftime("%d/%m/%Y %I:%M %p")
+    if not fecha_hora_formateada:
+        fecha_hora_formateada = datetime.now().strftime("%d/%m/%Y %I:%M %p")
     user_name_part = f" ({user_push_name})" if user_push_name else ""
     formatted_user_content = f"""Mensaje ACTUAL del cliente{user_name_part} (puede incluir texto de varios mensajes cortos concatenados, y/o la descripción de un archivo multimedia procesado): {message} -> [Fecha y hora actual - {fecha_hora_formateada}]"""
 
