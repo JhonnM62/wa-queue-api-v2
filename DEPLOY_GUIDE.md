@@ -291,19 +291,25 @@ Si tienes archivos locales (como historiales de conversaciones) y necesitas subi
 
 ### Método 1: Consola (Rápido, comando `scp`)
 
-Abre PowerShell en tu Windows local y ejecuta:
+Dado que la carpeta de descargas no existe por defecto, primero **entra a la consola de tu VPS** y crea la estructura:
+
+```bash
+mkdir -p /root/wa-queue-api-v2/Download/AutoSystem/historial/
+```
+
+Luego, abre PowerShell en tu **Windows local** y envía el contenido directamente a esa carpeta:
 
 ```powershell
-scp -r "C:\datos empleados\conversaciones_locales\*" root@TU_IP_VPS:/root/wa-queue-api-v2/Download/AutoSystem/
+scp -r "C:\datos empleados\conversaciones_locales\*" root@TU_IP_VPS:/root/wa-queue-api-v2/Download/AutoSystem/historial/
 ```
-*(Se te pedirá la contraseña del servidor VPS)*
+*(Si usas CMD en lugar de PowerShell y el asterisco falla, transfiere la carpeta completa y luego renómbrala en el servidor).*
 
 ### Método 2: Interfaz visual (Recomendado)
 
 1. Descarga e instala **WinSCP** en tu Windows.
 2. Conéctate con la IP, usuario `root` y tu contraseña del VPS.
-3. En la ventana izquierda, navega a tu carpeta `C:\datos empleados\conversaciones_locales`.
-4. En la ventana derecha, navega a `/root/wa-queue-api-v2/Download/AutoSystem/`.
-5. Arrastra las carpetas (ej. `historial`, `conf_2`) de izquierda a derecha.
+3. En la ventana derecha (VPS), ve a `/root/wa-queue-api-v2/` y crea las carpetas manualmente si no existen (`Download`, luego `AutoSystem`, luego `historial`).
+4. En la ventana izquierda (Windows), entra a `C:\datos empleados\conversaciones_locales`.
+5. Selecciona todo el contenido y arrástralo adentro de la carpeta `historial` en la ventana derecha.
 
 *Nota: Gracias al volumen `$PWD:/app`, cualquier archivo que transfieras a la carpeta del VPS será detectado por el contenedor de Docker de forma instantánea.*
