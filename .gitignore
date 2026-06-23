@@ -11,3 +11,11 @@ logs.txt
 scratch/
 .agents/
 temp_uploads/
+frontend/
+ejemplos/
+*.txt
+!requirements.txt
+*vscdb.py
+map_workspaces.py
+chroma_gui.py
+test_endpoint_wa_process.py
