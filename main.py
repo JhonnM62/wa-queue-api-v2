@@ -1107,6 +1107,74 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
 
     print(f"{log_prefix} " + "="*50)
 
+    # === VERIFICAR LANGGRAPH (Bot Activo en DB) ===
+    use_langgraph = False
+    bot_config = None
+    try:
+        from core.database import SessionLocal
+        from models import bot_models
+        db = SessionLocal()
+        bot_config = db.query(bot_models.BotConfig).filter(bot_models.BotConfig.userbot_identifier == userbot).first()
+        if bot_config and bot_config.is_active:
+            use_langgraph = True
+            
+            try:
+                tools_cfg = json.loads(bot_config.tools_config or "{}")
+            except:
+                tools_cfg = {}
+                
+            config_dict = {
+                "api_key": bot_config.apikey or req.apikey,
+                "ai_model": req.ai_model or bot_config.ai_model,
+                "tools_config": tools_cfg,
+                "bot_id": bot_config.id,
+                "userbot_identifier": bot_config.userbot_identifier,
+                "use_google_search": bot_config.use_google_search,
+                "use_google_maps": bot_config.use_google_maps,
+                "fallback_models": GEMINI_FALLBACK_MODELS_LIST
+            }
+        db.close()
+    except Exception as e:
+        print(f"{log_prefix} ❌ Error verificando BD para LangGraph: {e}")
+
+    if use_langgraph:
+        from services.graph import process_message_with_graph
+        print(f"{log_prefix} 🧠 [LangGraph] Procesando mensaje con LangGraph...")
+        try:
+            loop = asyncio.get_event_loop()
+            raw_text_from_gemini = await loop.run_in_executor(
+                None,
+                process_message_with_graph,
+                bot_config.id,
+                phone,
+                final_content_for_ai,
+                current_prompt_text_for_system_instruction,
+                config_dict,
+                history_list_from_file,
+                user_push_name
+            )
+            
+            try:
+                ai_response_json_payload = json.loads(raw_text_from_gemini)
+                print(f"{log_prefix} ✅ [LangGraph] Parseo exitoso del JSON.")
+                return ai_response_json_payload
+            except json.JSONDecodeError as e:
+                print(f"{log_prefix} ❌ Error decodificando JSON de LangGraph: {e}. Payload: {raw_text_from_gemini}")
+                # Intentar extraer JSON de la respuesta bruta si hay markdown json
+                import re
+                json_match = re.search(r'```(?:json)?(.*?)```', raw_text_from_gemini, re.DOTALL)
+                if json_match:
+                    try:
+                        ai_response_json_payload = json.loads(json_match.group(1).strip())
+                        print(f"{log_prefix} ✅ [LangGraph] Parseo exitoso tras extraer bloque markdown.")
+                        return ai_response_json_payload
+                    except Exception as ex:
+                        pass
+                return {"respuesta_cliente": raw_text_from_gemini, "estado_conversacion": "procesando", "accion_interna": ""}
+
+        except Exception as e:
+            print(f"{log_prefix} ❌ Error en LangGraph: {e}. Haremos fallback a legacy sin tools.")
+
     ai_response_json_payload = None
     last_overall_error_type = "initial_no_model_attempted"
 
