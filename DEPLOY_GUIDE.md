@@ -205,102 +205,50 @@ docker images | grep autosystem-backup
 
 ---
 
-## 11. Recrear el contenedor desde cero (con volúmenes correctos)
+## 11. Recrear el contenedor desde cero (Volumen de directorio completo)
 
-Sigue estos pasos en orden para no perder datos:
+Sigue estos pasos en tu VPS para actualizar o recrear el contenedor usando la técnica de volumen de directorio completo (Live Reload).
 
-### Paso 1 — Respaldar datos del contenedor actual
+### Paso 1 — Detener y eliminar el contenedor viejo
 
 ```bash
-# Ver el nombre del contenedor activo
+docker rm -f wa-queue-api-v2.2
+```
+
+### Paso 2 — Obtener la última versión del código
+
+Si ya tienes la carpeta, asegúrate de tener los últimos cambios de GitHub:
+
+```bash
+cd wa-queue-api-v2
+git pull origin main
+```
+
+*(Si no la tenías, clónala con `git clone https://github.com/JhonnM62/wa-queue-api-v2.git`)*
+
+### Paso 3 — Reconstruir la imagen
+
+Construye la imagen para que instale las últimas librerías de `requirements.txt`:
+
+```bash
+docker build -t wa-queue-api-v2.2 .
+```
+
+### Paso 4 — Levantar el contenedor mapeando el directorio
+
+Ejecuta este comando en la raíz de tu proyecto. El puerto expuesto será `8014` y se vinculará todo tu directorio actual (`$PWD`) al contenedor:
+
+```bash
+docker run -d --name wa-queue-api-v2.2 -p 8014:8000 -v "$PWD":/app wa-queue-api-v2.2
+```
+
+### Paso 5 — Verificar datos restaurados
+
+Verifica que el contenedor esté corriendo correctamente:
+
+```bash
 docker ps
-
-# Copiar todo lo importante al directorio del host donde tienes el proyecto
-docker cp <NOMBRE_CONTENEDOR>:/app/saas_database.db ./saas_database.db
-docker cp <NOMBRE_CONTENEDOR>:/app/threads_memory.db ./threads_memory.db
-docker cp <NOMBRE_CONTENEDOR>:/app/chroma_db ./chroma_db
-docker cp <NOMBRE_CONTENEDOR>:/app/Download ./Download
-docker cp <NOMBRE_CONTENEDOR>:/app/.env ./.env
-```
-
-### Paso 2 — Detener y eliminar el contenedor viejo
-
-```bash
-docker stop <NOMBRE_CONTENEDOR>
-docker rm <NOMBRE_CONTENEDOR>
-```
-
-### Paso 3 — Asegurarte de tener el `docker-compose.yml` correcto
-
-Crea o actualiza el `docker-compose.yml` en la raíz del proyecto:
-
-```yaml
-version: "3.8"
-
-services:
-  wa-bot:
-    build: .
-    container_name: autosystem-wa-bot
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - ./saas_database.db:/app/saas_database.db
-      - ./chroma_db:/app/chroma_db
-      - ./threads_memory.db:/app/threads_memory.db
-      - ./Download:/app/Download
-    restart: unless-stopped
-```
-
-### Paso 4 — Actualizar el `requirements.txt`
-
-Asegúrate de que el `requirements.txt` incluya los nuevos paquetes antes de reconstruir:
-
-```text
-langchain-chroma>=1.1.0
-langchain-text-splitters>=1.1.0
-langchain-community>=0.4.0
-langchain-google-genai>=2.0.0
-langgraph>=0.4.0
-sqlalchemy>=2.0.0
-bcrypt==4.0.1
-python-jose[cryptography]>=3.3.0
-python-multipart>=0.0.9
-pypdf>=4.0.0
-```
-
-### Paso 5 — Reconstruir la imagen y levantar
-
-```bash
-# Reconstruir la imagen (toma los cambios de requirements.txt y el código)
-docker-compose build --no-cache
-
-# Levantar el contenedor nuevo
-docker-compose up -d
-
-# Verificar que está corriendo
-docker ps
-docker logs autosystem-wa-bot -f
-```
-
-### Paso 6 — Verificar datos restaurados
-
-Entra al nuevo contenedor y confirma que los archivos existen:
-
-```bash
-docker exec -it autosystem-wa-bot bash
-ls -lh saas_database.db threads_memory.db chroma_db/ Download/
-```
-
-### Paso 7 — Verificar el admin (solo si la DB fue recreada desde cero)
-
-Si el `saas_database.db` fue copiado del contenedor anterior, el admin **ya existe** y no necesitas hacer nada.
-
-Si empezaste con una DB vacía:
-
-```bash
-docker exec -it autosystem-wa-bot python create_admin.py
+docker logs wa-queue-api-v2.2 -f
 ```
 
 ---
@@ -309,39 +257,28 @@ docker exec -it autosystem-wa-bot python create_admin.py
 
 | Ruta | Descripción |
 |---|---|
-| `http://IP:8000/` | Redirige automáticamente al panel |
-| `http://IP:8000/panel` | Panel SaaS (React) |
-| `http://IP:8000/docs` | Documentación Swagger de la API |
-| `http://IP:8000/api/auth/login` | Iniciar sesión (devuelve JWT) |
-| `http://IP:8000/api/bots/` | CRUD de configuraciones de bots |
-| `http://IP:8000/wa/process` | Endpoint de recepción de mensajes WhatsApp |
+| `http://IP:8014/` | Redirige automáticamente al panel |
+| `http://IP:8014/panel` | Panel SaaS (React) |
+| `http://IP:8014/docs` | Documentación Swagger de la API |
+| `http://IP:8014/api/auth/login` | Iniciar sesión (devuelve JWT) |
+| `http://IP:8014/api/bots/` | CRUD de configuraciones de bots |
+| `http://IP:8014/wa/process` | Endpoint de recepción de mensajes WhatsApp |
 
 ---
 
 ## Resumen rápido (cheatsheet)
 
 ```bash
-# ── PRIMERA VEZ ──────────────────────────────────────────────
-git clone ... /app && cd /app
-# Editar .env con GOOGLE_API_KEY y SECRET_KEY
-docker-compose build --no-cache
-docker-compose up -d
-docker exec -it autosystem-wa-bot python create_admin.py
+# ── PRIMERA VEZ / RECREAR CONTENEDOR ─────────────────────────
+git clone https://github.com/JhonnM62/wa-queue-api-v2.git
+cd wa-queue-api-v2
+# Editar .env con tus secretos
+docker build -t wa-queue-api-v2.2 .
+docker run -d --name wa-queue-api-v2.2 -p 8014:8000 -v "$PWD":/app wa-queue-api-v2.2
+docker exec -it wa-queue-api-v2.2 python create_admin.py
 
-# ── ACTUALIZACIÓN SIMPLE (sin recrear) ───────────────────────
-docker exec -it autosystem-wa-bot bash
+# ── ACTUALIZACIÓN RÁPIDA (Live Reload) ───────────────────────
+cd wa-queue-api-v2
 git pull origin main
-pip install -r requirements.txt
-# Si cambió el frontend:
-cd frontend && npm run build && cd ..
-kill $(pgrep -f "python main.py") && python main.py &
-
-# ── RECREAR CONTENEDOR (con backup) ──────────────────────────
-docker cp <CONTENEDOR>:/app/saas_database.db .
-docker cp <CONTENEDOR>:/app/chroma_db .
-docker cp <CONTENEDOR>:/app/threads_memory.db .
-docker cp <CONTENEDOR>:/app/Download .
-docker cp <CONTENEDOR>:/app/.env .
-docker stop <CONTENEDOR> && docker rm <CONTENEDOR>
-docker-compose build --no-cache && docker-compose up -d
+docker restart wa-queue-api-v2.2
 ```
