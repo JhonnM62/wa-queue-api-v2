@@ -1060,7 +1060,30 @@ def _call_gemini_sdk_sync(
         print(f"[{log_prefix_outer}] Warning: Gemini SDK for model {model_to_use} returned empty text output. Further JSON parsing will determine validity.")
 
     return final_text_output_from_api
-
+async def _save_message_to_db_async(bot_id: int, userbot: str, phone: str, role: str, message: str, payload_dict: dict = None, timestamp_ms: int = None):
+    try:
+        from core.database import SessionLocal
+        from models.bot_models import ConversationMessage
+        import json
+        import time
+        
+        db = SessionLocal()
+        payload_str = json.dumps(payload_dict, ensure_ascii=False) if payload_dict else None
+        
+        new_msg = ConversationMessage(
+            bot_id=bot_id,
+            userbot_identifier=userbot,
+            phone=phone,
+            role=role,
+            message=message,
+            raw_payload=payload_str,
+            timestamp_ms=timestamp_ms or int(time.time() * 1000)
+        )
+        db.add(new_msg)
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"[{userbot}/{phone}] Error saving history to SQLite DB: {e}")
 
 async def process_message_final(req: MessageRequest, message_fragments: List[str], pais: str, idioma: str, user_push_name: str = '') -> Optional[Dict[str, Any]]:
     # Extraer los datos y limpiarlos de espacios en blanco
@@ -1318,7 +1341,12 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 "use_google_maps": getattr(req, 'use_google_maps', False) or bot_config.use_google_maps,
                 "fallback_models": GEMINI_FALLBACK_MODELS_LIST,
                 "thinking_level": getattr(req, 'thinking_level', bot_config.thinking_level or 'HIGH'),
-                "thinking_budget": getattr(req, 'thinking_budget', bot_config.thinking_budget or 0)
+                "thinking_budget": getattr(req, 'thinking_budget', bot_config.thinking_budget or 0),
+                "server": getattr(req, 'server', ''),
+                "token": getattr(req, 'token', ''),
+                "receiver": getattr(req, 'lineaogruponotificacion', ''),
+                "is_group": getattr(req, 'lineaogrupo', False),
+                "user_phone": req.lineaWA
             }
         db.close()
     except Exception as e:
@@ -1338,7 +1366,7 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 final_content_for_ai,
                 current_prompt_text_for_system_instruction,
                 config_dict,
-                history_list_from_file,
+                items_for_prompt_history,
                 user_push_name,
                 formatted_dt_prompt
             )
@@ -1632,9 +1660,20 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
         estado_conv_from_ai = ai_response_json_payload.get(
             "estado_conversacion", "desconocido_post_procesado")
         actions_payload_for_whatsapp = {
-            k: v for k, v in ai_response_json_payload.items() if k.isdigit()
+            k: v for k, v in ai_response_json_payload.items() if str(k).isdigit()
         }
-        ai_response_json_payload_for_history = ai_response_json_payload
+
+        # FIX (Bug #1): Compatibilidad con formato Pydantic de LangGraph (ChatbotResponse)
+        if not actions_payload_for_whatsapp and "respuesta_cliente" in ai_response_json_payload:
+            respuesta_texto = ai_response_json_payload.get("respuesta_cliente", "")
+            if respuesta_texto:
+                actions_payload_for_whatsapp = {"1": {"tipo": "mensaje", "mensaje": respuesta_texto}}
+                print(f"{log_prefix} [PARSER FIX] Formato de LangGraph convertido a formato numérico.")
+
+        ai_response_json_payload_for_history = {
+            "estado_conversacion": estado_conv_from_ai,
+            **actions_payload_for_whatsapp
+        }
 
     client_msg_timestamp = int(time.time() * 1000)
     upgraded_previous_entry = False
@@ -1698,6 +1737,32 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
     try:
         with open(history_file, 'w', encoding='utf-8') as f:
             json.dump(history_list_from_file, f, ensure_ascii=False, indent=2)
+
+        # NUEVO (Change E): Guardar asincrónicamente en la tabla SQLite como respaldo/analytics
+        # Solo si conocemos el bot_id (uso de LangGraph)
+        if use_langgraph and bot_config:
+            import asyncio
+            # Cliente
+            asyncio.create_task(_save_message_to_db_async(
+                bot_id=bot_config.id,
+                userbot=userbot,
+                phone=phone,
+                role="cliente",
+                message=client_message_for_history,
+                payload_dict=None,
+                timestamp_ms=client_msg_timestamp
+            ))
+            # Asistente
+            asyncio.create_task(_save_message_to_db_async(
+                bot_id=bot_config.id,
+                userbot=userbot,
+                phone=phone,
+                role="asistente",
+                message=ai_summary_for_history,
+                payload_dict=ai_response_json_payload_for_history,
+                timestamp_ms=int(time.time() * 1000)
+            ))
+            
     except Exception as e:
         print(f"{log_prefix} Error updating JSON history (AI): {e}")
 
@@ -2067,7 +2132,9 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
             estado_conversacion_ai = ai_response.get("estado_conversacion", "")
 
             # Lógica de notificación
-            if (current_task_req_info.activarnotificacion and
+            notification_system_mode = os.getenv("NOTIFICATION_SYSTEM", "legacy").strip().lower()
+            if (notification_system_mode != "tool" and
+                current_task_req_info.activarnotificacion and
                 current_task_req_info.estado and
                 current_task_req_info.lineaogruponotificacion and
                     estado_conversacion_ai == current_task_req_info.estado):

@@ -56,3 +56,15 @@ class BotConfig(Base):
     tools_config = Column(Text, default='{"buscar_catalogo": true, "enviar_notificacion": true, "obtener_hora": true}')
 
     owner = relationship("User", back_populates="bots")
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    bot_id = Column(Integer, ForeignKey("bots.id"), nullable=True)
+    userbot_identifier = Column(String, index=True)
+    phone = Column(String, index=True)
+    role = Column(String)  # 'cliente', 'asistente', etc.
+    message = Column(Text)
+    raw_payload = Column(Text, nullable=True) # JSON del payload
+    timestamp_ms = Column(Integer, index=True)

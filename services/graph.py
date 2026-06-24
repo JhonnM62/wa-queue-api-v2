@@ -41,18 +41,6 @@ class AgentState(TypedDict):
 
 # ── Respuesta estructurada ────────────────────────────────────────────────────
 
-class ChatbotResponse(BaseModel):
-    estado_conversacion: str = Field(
-        description="Estado actual: Saludo, Pedido, Cierre, Ayuda"
-    )
-    respuesta_cliente: str = Field(
-        description="El mensaje en lenguaje natural para el cliente"
-    )
-    accion_interna: str = Field(
-        description="Acción a realizar: NINGUNA, NOTIFICAR, PAUSAR"
-    )
-
-
 # ── Nodo del agente ───────────────────────────────────────────────────────────
 
 INSTRUCCIONES_JSON = (
@@ -62,12 +50,7 @@ INSTRUCCIONES_JSON = (
     "Mientras uses herramientas, NO respondas en formato JSON todavía. Simplemente invoca la herramienta necesaria.\n\n"
     "RESPUESTA FINAL AL USUARIO:\n"
     "Solo cuando hayas obtenido la información de las herramientas (o si no fue necesario usarlas), "
-    "debes dar tu respuesta FINAL ÚNICAMENTE en formato JSON válido con la siguiente estructura estricta:\n"
-    "{\n"
-    '  "estado_conversacion": "Saludo|Pedido|Cierre|Ayuda",\n'
-    '  "respuesta_cliente": "Tu mensaje aquí...",\n'
-    '  "accion_interna": "NINGUNA|NOTIFICAR|PAUSAR"\n'
-    "}\n"
+    "debes dar tu respuesta FINAL ÚNICAMENTE en formato JSON válido de acuerdo a la estructura que se te ha indicado anteriormente.\n"
     "Asegúrate de que la salida sea ÚNICAMENTE el JSON, sin bloques de código markdown ni texto adicional."
 )
 
@@ -250,6 +233,11 @@ def _json_history_to_lc_messages(
         content = entry.get("mensaje", "")
         if not content:
             continue
+            
+        # Filtrar entradas basura generadas por errores de parseo (Bug #1 y #2)
+        if "Respuesta IA no textual" in content:
+            continue
+            
         if role in human_roles:
             lc_messages.append(HumanMessage(content=content))
         elif role in ai_roles:
@@ -286,6 +274,12 @@ def process_message_with_graph(
     """
     # 1. Convertir historial JSON a mensajes LangChain
     history_messages = _json_history_to_lc_messages(json_history or [])
+
+    print(f"[{bot_id}/{phone}] [HISTORIAL] Entradas JSON recibidas: {len(json_history or [])}")
+    print(f"[{bot_id}/{phone}] [HISTORIAL] Mensajes convertidos a LangChain: {len(history_messages)}")
+    if history_messages:
+        print(f"[{bot_id}/{phone}] [HISTORIAL] Primer msg (antiguo): {str(history_messages[0].content)[:100]}...")
+        print(f"[{bot_id}/{phone}] [HISTORIAL] Último msg (reciente): {str(history_messages[-1].content)[:100]}...")
 
     # 2. Agregar el mensaje actual al final, incluyendo el pushName
     if not fecha_hora_formateada:
