@@ -2162,11 +2162,14 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
         if task_key not in processing_tasks or processing_tasks[task_key]['task'] is not asyncio.current_task():
             return
 
-        task_info = processing_tasks.pop(task_key, None)
+        task_info = processing_tasks.get(task_key)
         if not task_info:
             return
 
         actual_fragments = [f.strip() for f in task_info['fragments'] if f.strip()]
+        # Limpiamos los fragmentos para que si llega uno nuevo, no duplique lo que ya vamos a mandar
+        # pero MANTENEMOS la tarea en processing_tasks para poder cancelarla si entra un nuevo webhook.
+        processing_tasks[task_key]['fragments'] = []
         user_push_name = task_info.get('user_push_name', current_task_req_info.userbot)
 
         if not actual_fragments:
@@ -3177,7 +3180,7 @@ async def dashboard():
 
             async function fetchOrders() {
                 try {
-                    const res = await fetch('/api/orders');
+                    const res = await fetch('/api/orders?t=' + new Date().getTime());
                     const newOrders = await res.json();
                     
                     // Check for new "Recientes" on TODAY's date to alert
