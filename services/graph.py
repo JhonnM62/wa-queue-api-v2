@@ -168,6 +168,14 @@ def call_model(state: AgentState):
             print(f"{log_prefix} [RAW OUTPUT FROM SDK - MODEL: {current_model}]:")
             print(response.content)
 
+            # Debug para ver si se activaron herramientas
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                print(f"{log_prefix} [TOOLS-ACTIVATION] 🔧 El modelo decidió activar las siguientes herramientas: {[t.get('name') for t in response.tool_calls]}")
+                for t in response.tool_calls:
+                    print(f"{log_prefix}    -> Tool: {t.get('name')} | Args: {t.get('args', {})}")
+            else:
+                print(f"{log_prefix} [TOOLS-ACTIVATION] ⏸️ El modelo NO activó ninguna herramienta en este turno.")
+
             # Check for grounding metadata in response attributes
             if hasattr(response, 'response_metadata') and response.response_metadata:
                 grounding_metadata = response.response_metadata.get('groundingMetadata') or response.response_metadata.get('grounding_metadata')

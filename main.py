@@ -1352,6 +1352,8 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
     except Exception as e:
         print(f"{log_prefix} ❌ Error verificando BD para LangGraph: {e}")
 
+    ai_response_json_payload = None
+
     if use_langgraph:
         from services.graph import process_message_with_graph
         print(
