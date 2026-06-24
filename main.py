@@ -1743,7 +1743,6 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
         # NUEVO (Change E): Guardar asincrónicamente en la tabla SQLite como respaldo/analytics
         # Solo si conocemos el bot_id (uso de LangGraph)
         if use_langgraph and bot_config:
-            import asyncio
             # Cliente
             asyncio.create_task(_save_message_to_db_async(
                 bot_id=bot_config.id,
