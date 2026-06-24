@@ -247,10 +247,9 @@ def _json_history_to_lc_messages(
             continue
             
         if role in human_roles:
-            lc_messages.append(HumanMessage(content=content))
+            lc_messages.append(HumanMessage(content=f"[CLIENTE]: {content}"))
         elif role in ai_roles:
-            # La respuesta del asistente puede ser JSON crudo; la mantenemos tal cual
-            lc_messages.append(AIMessage(content=content))
+            lc_messages.append(AIMessage(content=f"[ASISTENTE]: {content}"))
 
     return lc_messages
 

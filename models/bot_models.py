@@ -39,6 +39,12 @@ class BotConfig(Base):
     pais = Column(String, default="colombia")
     idioma = Column(String, default="es")
 
+    # === CONFIGURACION IA EXTRA ===
+    numerodemensajes = Column(Integer, default=10)
+    temperature = Column(Float, default=0.5)
+    topP = Column(Float, default=0.95)
+    maxOutputTokens = Column(Integer, default=4096)
+
     # === TIEMPOS ===
     delay_seconds = Column(Float, default=0.0)
     pause_timeout_minutes = Column(Integer, default=30)
