@@ -78,6 +78,7 @@ def enviar_notificacion_tool(
         detalle_completo = f"{lista_productos}"
 
         orders_data[order_id] = {
+            "id": order_id,
             "phone": user_phone,
             "summary": resumen_general,
             "pedido": lista_productos,
