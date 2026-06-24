@@ -31,7 +31,7 @@ def enviar_notificacion_tool(
     import json
     import os
     import time
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     config_dict = config["configurable"].get("config_dict", {})
     
@@ -47,7 +47,7 @@ def enviar_notificacion_tool(
 
     # 1. Guardar en el dashboard (orders.json)
     ORDERS_FILE_PATH = "orders.json"
-    order_timestamp = datetime.now().isoformat()
+    order_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
     order_id = f"ORDER_{int(time.time())}_{user_phone[-4:]}"
 
     try:
@@ -81,7 +81,15 @@ def enviar_notificacion_tool(
     headers = {"Content-Type": "application/json", "x-access-token": token}
     
     link_message_text = f"https://wa.me/{user_phone}"
-    detail_message_text = f"Nuevo Pedido (vía LangGraph Tool):\n\nProductos: {lista_productos}\nTotal: {total_a_cobrar}\nDir: {direccion_envio}\nPago: {metodo_pago}"
+    detail_message_text = (
+        "🚨 *NUEVO PEDIDO* 🚨\n\n"
+        f"📱 *Cliente:* {user_phone}\n\n"
+        f"📝 *Detalle del Pedido:*\n👉 {lista_productos}\n\n"
+        f"💰 *Total a Cobrar:* {total_a_cobrar}\n"
+        f"💳 *Método de Pago:* {metodo_pago}\n"
+        f"📍 *Dirección de Entrega:* {direccion_envio}\n\n"
+        f"🤖 *Resumen IA:* {resumen_general}"
+    )
     combined_message_text = f"{detail_message_text}\n\n{link_message_text}"
 
     combined_payload = {
