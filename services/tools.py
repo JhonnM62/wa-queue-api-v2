@@ -46,7 +46,7 @@ def enviar_notificacion_tool(
         return "Fallo: No se encontraron los datos del servidor o del receptor para notificar."
 
     # 1. Guardar en el dashboard (orders.json)
-    ORDERS_FILE_PATH = "orders.json"
+    ORDERS_FILE_PATH = "./Download/AutoSystem/orders.json"
     order_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
     order_id = f"ORDER_{int(time.time())}_{user_phone[-4:]}"
 
@@ -54,13 +54,34 @@ def enviar_notificacion_tool(
         orders_data = {}
         if os.path.exists(ORDERS_FILE_PATH):
             with open(ORDERS_FILE_PATH, 'r', encoding='utf-8') as f:
-                orders_data = json.load(f)
-                
+                content = f.read()
+                if content.strip():
+                    orders_data = json.loads(content)
+
+        # Buscar si ya existe un pedido reciente para este teléfono hoy
+        is_modification = False
+        existing_order_id = None
+        for oid, odata in orders_data.items():
+            if odata.get("phone") == user_phone and odata.get("status") in ["Recientes", "En Preparación"]:
+                # Es del mismo día?
+                order_ts = odata.get("timestamp", 0)
+                if order_ts:
+                    order_date = datetime.fromtimestamp(order_ts / 1000, tz=timezone.utc).date()
+                    if order_date == datetime.now(timezone.utc).date():
+                        is_modification = True
+                        existing_order_id = oid
+                        break
+        
+        if is_modification and existing_order_id:
+            order_id = existing_order_id
+            
+        detalle_completo = f"{lista_productos}"
+
         orders_data[order_id] = {
             "phone": user_phone,
             "summary": resumen_general,
             "pedido": lista_productos,
-            "detalle_completo": f"Resumen: {resumen_general}\nProductos: {lista_productos}\nTotal: {total_a_cobrar}\nDirección: {direccion_envio}\nPago: {metodo_pago}",
+            "detalle_completo": detalle_completo,
             "total_a_cobrar": total_a_cobrar,
             "direccion": direccion_envio,
             "metodo_pago": metodo_pago,
@@ -81,11 +102,16 @@ def enviar_notificacion_tool(
     headers = {"Content-Type": "application/json", "x-access-token": token}
     
     link_message_text = f"https://wa.me/{user_phone}"
+    
+    header_title = "🛍️ *NUEVO PEDIDO* 🛍️"
+    if is_modification:
+        header_title = "🔄 *PEDIDO MODIFICADO* 🔄"
+
     detail_message_text = (
-        "🚨 *NUEVO PEDIDO* 🚨\n\n"
-        f"📱 *Cliente:* {user_phone}\n\n"
-        f"📝 *Detalle del Pedido:*\n👉 {lista_productos}\n\n"
-        f"💰 *Total a Cobrar:* {total_a_cobrar}\n"
+        f"{header_title}\n\n"
+        f"👤 *Cliente:* {user_phone}\n\n"
+        f"📝 *Detalle del Pedido:*\n{lista_productos}\n\n"
+        f"💵 *Total a Cobrar:* {total_a_cobrar}\n"
         f"💳 *Método de Pago:* {metodo_pago}\n"
         f"📍 *Dirección de Entrega:* {direccion_envio}\n\n"
         f"🤖 *Resumen IA:* {resumen_general}"
