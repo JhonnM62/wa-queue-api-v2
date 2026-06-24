@@ -204,6 +204,56 @@ class GetHistoryRequest(BaseModel):
 app = FastAPI(title="WhatsApp Message Processor",
               version="1.2.31_gemini_thinking_config_v2")
 
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 Iniciando aplicación y verificando esquema de BD...")
+    try:
+        from core.database import SQLALCHEMY_DATABASE_URL
+        db_path = SQLALCHEMY_DATABASE_URL.replace("sqlite:///", "")
+        
+        # SQLite migrations for new columns
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("PRAGMA table_info(bots)")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+        
+        columns_to_add = [
+            ("numerodemensajes", "INTEGER DEFAULT 10"),
+            ("temperature", "REAL DEFAULT 0.5"),
+            ("topP", "REAL DEFAULT 0.95"),
+            ("maxOutputTokens", "INTEGER DEFAULT 4096")
+        ]
+        
+        for col_name, col_def in columns_to_add:
+            if col_name not in existing_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE bots ADD COLUMN {col_name} {col_def}")
+                    print(f"🔧 [Migración BD] Columna agregada exitosamente: {col_name}")
+                except Exception as e:
+                    print(f"⚠️ [Migración BD] Error al agregar {col_name}: {e}")
+                    
+        # Ensure conversation_messages table exists
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            userbot_identifier TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            role TEXT NOT NULL,
+            message TEXT,
+            raw_payload TEXT,
+            timestamp_ms INTEGER NOT NULL,
+            FOREIGN KEY(bot_id) REFERENCES bots(id)
+        );
+        """)
+        conn.commit()
+        conn.close()
+        print("✅ [Migración BD] Verificación de esquema completada.")
+    except Exception as e:
+        print(f"❌ [Migración BD] Error general durante la migración: {e}")
+
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(bots_router, prefix="/api/bots", tags=["bots"])
