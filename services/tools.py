@@ -79,7 +79,17 @@ def enviar_notificacion_tool(
             resultado.append(linea_strip)
         return '\n'.join(resultado)
 
+    def format_money(m_str: str) -> str:
+        if not m_str: return m_str
+        import re
+        # Busca 4 o más dígitos consecutivos y los formatea con separador de miles (punto)
+        return re.sub(r'\d{4,}', lambda m: f"{int(m.group(0)):,}".replace(",", "."), str(m_str))
+
     detalle_completo = format_detalle_wa(lista_productos)
+    # Formatear números grandes con puntos de mil en el detalle
+    detalle_completo = format_money(detalle_completo)
+    
+    total_a_cobrar = format_money(total_a_cobrar)
 
     # --- Lógica de deduplicación unificada con main.py ---
     # Usar el teléfono como order_id base para evitar duplicados entre las dos rutas
