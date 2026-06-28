@@ -603,7 +603,7 @@ async def fetch_chat_history_since_timestamp_ms(userbot: str, token: str, phone:
             if isinstance(response_data, dict) and 'data' in response_data and isinstance(response_data['data'], list):
                 messages_from_api = sorted(
                     response_data['data'],
-                    key=lambda m: int(m.get("messageTimestamp", 0))
+                    key=lambda m: convert_timestamp_to_ms(m.get("messageTimestamp", 0))
                 )
                 new_messages = messages_from_api
             else:
@@ -767,8 +767,8 @@ async def append_paused_history(req: MessageRequest):
     max_ts_from_raw_fetch_ms = since_timestamp_ms
     if new_raw_messages:
         timestamps_in_fetch = [
-            int(msg.get("messageTimestamp", 0)) * 1000
-            for msg in new_raw_messages if msg.get("messageTimestamp") and str(msg.get("messageTimestamp")).isdigit()
+            convert_timestamp_to_ms(msg.get("messageTimestamp", 0))
+            for msg in new_raw_messages if msg.get("messageTimestamp")
         ]
         if timestamps_in_fetch:
             max_ts_from_raw_fetch_ms = max(
@@ -782,7 +782,7 @@ async def append_paused_history(req: MessageRequest):
 
     messages_to_process = [
         msg for msg in new_raw_messages
-        if int(msg.get("messageTimestamp", 0)) * 1000 > last_timestamp_in_history_ms
+        if convert_timestamp_to_ms(msg.get("messageTimestamp", 0)) > last_timestamp_in_history_ms
     ]
 
     if not messages_to_process:
@@ -2555,27 +2555,32 @@ async def handle_incoming_message(req: MessageRequest):
     current_state = load_contact_state(userbot, phone)
     was_previously_paused = is_contact_paused(current_state, req.pause_timeout_minutes)
 
-    # 1) Añadimos fragmento
+    # 1) Añadimos fragmento al grupo de este usuario
     if task_key in processing_tasks:
         task_info = processing_tasks[task_key]
         if new_fragment:
             task_info['fragments'].append(new_fragment)
-        task_to_cancel = task_info.get('task')
-        if task_to_cancel and not task_to_cancel.done():
-            task_to_cancel.cancel()
+        # ✅ VENTANA FIJA: si la tarea sigue activa, NO cancelarla.
+        # El timer corre desde el primer mensaje — simplemente acumulamos y salimos.
+        existing_task = task_info.get('task')
+        if existing_task and not existing_task.done():
+            elapsed_time = time.time() - req_start_time
+            print(
+                f"{log_prefix} ⚡ Webhook procesado en {elapsed_time:.3f}s. Fragmento acumulado en ventana activa (no se reinicia el timer).")
+            return {"status": "fragment_queued", "task_key": task_key}
     else:
         processing_tasks[task_key] = {
             'fragments': [new_fragment] if new_fragment else [],
             'user_push_name': '',
         }
 
-    # 2) Guardar snapshot para procesarlo en la tarea de fondo
+    # 2) Guardar snapshot — solo se ejecuta para el PRIMER mensaje del grupo
     task_req_info = req
     processing_tasks[task_key]['original_request'] = task_req_info
     processing_tasks[task_key]['state_snapshot'] = current_state.copy()
     processing_tasks[task_key]['was_paused_snapshot'] = was_previously_paused
 
-    # 3) Lanzamos tarea asíncrona
+    # 3) Lanzar la tarea de procesamiento diferido (solo para el primer mensaje)
     processing_tasks[task_key]['task'] = asyncio.create_task(
         delayed_processing_task(task_key, task_req_info)
     )

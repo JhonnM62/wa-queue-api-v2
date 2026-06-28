@@ -48,7 +48,32 @@ def enviar_notificacion_tool(
     # 1. Guardar en el dashboard (orders.json)
     ORDERS_FILE_PATH = "./Download/AutoSystem/orders.json"
     order_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
-    order_id = f"ORDER_{int(time.time())}_{user_phone[-4:]}"
+
+    # Formatear lista_productos con emoji 👉 para consistencia visual con WhatsApp
+    def format_detalle_wa(texto: str) -> str:
+        if not texto:
+            return texto
+        lineas = texto.strip().split('\n')
+        resultado = []
+        for linea in lineas:
+            linea_strip = linea.strip()
+            if not linea_strip:
+                resultado.append('')
+                continue
+            # Agregar 👉 a líneas de productos (no a sub-ítems con guión ni a líneas ya formateadas)
+            if (not linea_strip.startswith('👉') and
+                    not linea_strip.startswith('-') and
+                    not linea_strip.startswith('•')):
+                linea_strip = f"👉 {linea_strip}"
+            resultado.append(linea_strip)
+        return '\n'.join(resultado)
+
+    detalle_completo = format_detalle_wa(lista_productos)
+
+    # --- Lógica de deduplicación unificada con main.py ---
+    # Usar el teléfono como order_id base para evitar duplicados entre las dos rutas
+    is_modification = False
+    existing_order_id = None
 
     try:
         orders_data = {}
@@ -58,47 +83,72 @@ def enviar_notificacion_tool(
                 if content.strip():
                     orders_data = json.loads(content)
 
-        # Buscar si ya existe un pedido reciente para este teléfono hoy
-        is_modification = False
-        existing_order_id = None
+        # Buscar pedido activo del mismo teléfono en el día de hoy (cualquier status excepto Despachados)
+        today = datetime.now(timezone.utc).date()
         for oid, odata in orders_data.items():
-            if odata.get("phone") == user_phone and odata.get("status") in ["Recientes", "En Preparación"]:
-                # Es del mismo día?
+            if odata.get("phone") == user_phone and odata.get("status") != "Despachados":
                 order_ts = odata.get("timestamp", 0)
                 if order_ts:
                     order_date = datetime.fromtimestamp(order_ts / 1000, tz=timezone.utc).date()
-                    if order_date == datetime.now(timezone.utc).date():
+                    if order_date == today:
                         is_modification = True
                         existing_order_id = oid
                         break
-        
+
         if is_modification and existing_order_id:
+            # ACTUALIZAR in-place: preservar timestamp original, status e historial
+            orders_data[existing_order_id]["summary"] = resumen_general
+            
+            # Evitar que la IA sobrescriba el detalle con un resumen genérico al modificar el pago
+            # Detectamos frases como "Productos por un total de" o "(Detalle en historial)"
+            texto_lower = lista_productos.lower()
+            is_generic_summary = "historial" in texto_lower or "productos por un total" in texto_lower
+            
+            if not is_generic_summary:
+                orders_data[existing_order_id]["pedido"] = lista_productos
+                orders_data[existing_order_id]["detalle_completo"] = detalle_completo
+                
+            orders_data[existing_order_id]["total_a_cobrar"] = total_a_cobrar
+            orders_data[existing_order_id]["direccion"] = direccion_envio
+            orders_data[existing_order_id]["metodo_pago"] = metodo_pago
             order_id = existing_order_id
             
-        detalle_completo = f"{lista_productos}"
+            # Si preservamos el detalle anterior, asegurarnos de usarlo para la notificación HTTP de WhatsApp
+            if is_generic_summary:
+                detalle_completo = orders_data[existing_order_id].get("detalle_completo", detalle_completo)
+                
+            print(f"[tools/enviar_notificacion/{user_phone}] Pedido actualizado en dashboard (ID: {order_id}). Sin duplicado.")
+        else:
+            # Pedido nuevo — usar teléfono como order_id (mismo esquema que main.py)
+            order_id = user_phone
+            # Si ya existe ese ID pero está Despachado, agregar timestamp para no pisarlo
+            if order_id in orders_data and orders_data[order_id].get("status") == "Despachados":
+                order_id = f"{user_phone}_{int(time.time())}"
 
-        orders_data[order_id] = {
-            "id": order_id,
-            "phone": user_phone,
-            "summary": resumen_general,
-            "pedido": lista_productos,
-            "detalle_completo": detalle_completo,
-            "total_a_cobrar": total_a_cobrar,
-            "direccion": direccion_envio,
-            "metodo_pago": metodo_pago,
-            "status": "Recientes",
-            "timestamp": order_timestamp,
-            "static_duration": 0,
-            "history": [{"status": "Recientes", "timestamp": order_timestamp}],
-            "origen": "tool_langgraph"
-        }
+            orders_data[order_id] = {
+                "id": order_id,
+                "phone": user_phone,
+                "summary": resumen_general,
+                "pedido": lista_productos,
+                "detalle_completo": detalle_completo,
+                "total_a_cobrar": total_a_cobrar,
+                "direccion": direccion_envio,
+                "metodo_pago": metodo_pago,
+                "status": "Recientes",
+                "timestamp": order_timestamp,
+                "static_duration": 0,
+                "history": [{"status": "Recientes", "timestamp": order_timestamp}],
+                "origen": "tool_langgraph"
+            }
+            print(f"[tools/enviar_notificacion/{user_phone}] Nuevo pedido guardado en dashboard (ID: {order_id}).")
 
         with open(ORDERS_FILE_PATH, 'w', encoding='utf-8') as f:
             json.dump(orders_data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"Error al guardar en dashboard: {e}")
 
-    # 2. Enviar notificación HTTP
+    except Exception as e:
+        print(f"[tools/enviar_notificacion/{user_phone}] Error al guardar en dashboard: {e}")
+
+    # 2. Enviar notificación HTTP a WhatsApp
     send_url = f"{server_url}/chats/send?id={userbot}"
     headers = {"Content-Type": "application/json", "x-access-token": token}
     
@@ -111,7 +161,7 @@ def enviar_notificacion_tool(
     detail_message_text = (
         f"{header_title}\n\n"
         f"👤 *Cliente:* {user_phone}\n\n"
-        f"📝 *Detalle del Pedido:*\n{lista_productos}\n\n"
+        f"📝 *Detalle del Pedido:*\n{detalle_completo}\n\n"
         f"💵 *Total a Cobrar:* {total_a_cobrar}\n"
         f"💳 *Método de Pago:* {metodo_pago}\n"
         f"📍 *Dirección de Entrega:* {direccion_envio}\n\n"
