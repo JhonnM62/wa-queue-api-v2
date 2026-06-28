@@ -95,12 +95,29 @@ def enviar_notificacion_tool(
                         existing_order_id = oid
                         break
 
+        is_exact_duplicate = False
         if is_modification and existing_order_id:
+            existing_order = orders_data[existing_order_id]
+            
+            # Comprobar si el pedido es idéntico al anterior para evitar spam ANTES de modificarlo
+            if order_timestamp - existing_order.get("timestamp", 0) < 12 * 3600 * 1000:
+                def clean_str(t):
+                    if not t: return ""
+                    return "".join(c.lower() for c in str(t) if c.isalnum())
+                
+                old_det = clean_str(existing_order.get("detalle_completo", ""))
+                new_det = clean_str(detalle_completo)
+                old_tot = clean_str(existing_order.get("total_a_cobrar", ""))
+                new_tot = clean_str(total_a_cobrar)
+                
+                # Si el detalle (productos) y el total son iguales, lo consideramos duplicado exacto para no mandar spam a WhatsApp.
+                if old_det == new_det and old_tot == new_tot:
+                    is_exact_duplicate = True
+
             # ACTUALIZAR in-place: preservar timestamp original, status e historial
             orders_data[existing_order_id]["summary"] = resumen_general
             
             # Evitar que la IA sobrescriba el detalle con un resumen genérico al modificar el pago
-            # Detectamos frases como "Productos por un total de" o "(Detalle en historial)"
             texto_lower = lista_productos.lower()
             is_generic_summary = "historial" in texto_lower or "productos por un total" in texto_lower
             
@@ -144,6 +161,11 @@ def enviar_notificacion_tool(
 
     except Exception as e:
         print(f"[tools/enviar_notificacion/{user_phone}] Error al guardar en dashboard: {e}")
+
+    # --- NUEVO: Omitir spam de WhatsApp si es un cambio menor (duplicado exacto) ---
+    if is_exact_duplicate:
+        print(f"[tools/enviar_notificacion/{user_phone}] Omitiendo notificación por WhatsApp porque el detalle y total no cambiaron.")
+        return "Notificación omitida por duplicado exacto, pero pedido actualizado en dashboard."
 
     # 2. Enviar notificación HTTP a WhatsApp
     send_url = f"{server_url}/chats/send?id={userbot}"
