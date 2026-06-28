@@ -136,6 +136,13 @@ def enviar_notificacion_tool(
                 orders_data[existing_order_id]["pedido"] = lista_productos
                 orders_data[existing_order_id]["detalle_completo"] = detalle_completo
                 
+            # Preservar dirección anterior si la nueva es "N.A." o vacía
+            old_addr = existing_order.get("direccion", "")
+            new_addr_lower = direccion_envio.lower().strip()
+            if new_addr_lower in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"] or not new_addr_lower:
+                if old_addr and old_addr.lower() not in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"]:
+                    direccion_envio = old_addr
+
             orders_data[existing_order_id]["total_a_cobrar"] = total_a_cobrar
             orders_data[existing_order_id]["direccion"] = direccion_envio
             orders_data[existing_order_id]["metodo_pago"] = metodo_pago

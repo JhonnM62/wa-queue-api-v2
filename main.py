@@ -1327,9 +1327,48 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
     loc_time = loc_time_val.replace('am', 'AM').replace(
         'pm', 'PM') + f" ({timezone_str})"
     formatted_dt_prompt = f"Es el dia {loc_day} {loc_date} y son las {loc_time}"
+    # === VERIFICAR LANGGRAPH Y OBTENER CONFIG DB ===
+    use_langgraph = False
+    bot_config = None
+    try:
+        from core.database import SessionLocal
+        from models import bot_models
+        db = SessionLocal()
+        bot_config = db.query(bot_models.BotConfig).filter(
+            bot_models.BotConfig.userbot_identifier == userbot).first()
+        if bot_config and bot_config.is_active:
+            use_langgraph = True
+
+            try:
+                tools_cfg = json.loads(bot_config.tools_config or "{}")
+            except:
+                tools_cfg = {}
+
+            config_dict = {
+                "api_key": bot_config.apikey or req.apikey,
+                "ai_model": bot_config.ai_model or req.ai_model,
+                "tools_config": tools_cfg,
+                "bot_id": bot_config.id,
+                "userbot_identifier": bot_config.userbot_identifier,
+                "use_google_search": bot_config.use_google_search or getattr(req, 'use_google_search', False),
+                "use_google_maps": bot_config.use_google_maps or getattr(req, 'use_google_maps', False),
+                "fallback_models": GEMINI_FALLBACK_MODELS_LIST,
+                "thinking_level": bot_config.thinking_level or getattr(req, 'thinking_level', 'HIGH'),
+                "thinking_budget": bot_config.thinking_budget if (bot_config.thinking_budget is not None) else getattr(req, 'thinking_budget', -1),
+                "server": getattr(req, 'server', ''),
+                "token": getattr(req, 'token', ''),
+                "receiver": getattr(req, 'lineaogruponotificacion', ''),
+                "is_group": getattr(req, 'lineaogrupo', False),
+                "user_phone": req.lineaWA
+            }
+        db.close()
+    except Exception as e:
+        print(f"{log_prefix} ❌ Error verificando BD: {e}")
+
+    effective_promt = bot_config.system_prompt if (bot_config and bot_config.system_prompt) else req.promt
 
     prompt_data = {
-        "system_rules_base": req.promt,
+        "system_rules_base": effective_promt,
         "num_mensajes_shown": num_actual_items_shown,
         "historial_texto": plain_history_for_prompt,
         "idioma_respuesta": idioma,
@@ -1356,51 +1395,18 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
     print(f"{log_prefix} ZONA_HORARIA: {timezone_str}")
     print(f"{log_prefix} FECHA_HORA_FORMATEADA: {formatted_dt_prompt}")
 
+    # Priorizar DB para configs
+    effective_ai_model = bot_config.ai_model if (bot_config and bot_config.ai_model) else req.ai_model
+    effective_thinking_level = bot_config.thinking_level if (bot_config and bot_config.thinking_level) else getattr(req, 'thinking_level', 'HIGH')
+    effective_thinking_budget = bot_config.thinking_budget if (bot_config and bot_config.thinking_budget is not None) else getattr(req, 'thinking_budget', -1)
+
     # Logs detallados de parámetros por modelo
-    if req.ai_model and "gemini-3" in req.ai_model:
-        print(f"{log_prefix} PARAMETROS IA (GEMINI 3.0+): Level={getattr(req, 'thinking_level', 'HIGH')}, MediaRes={getattr(req, 'media_resolution', 'MEDIA_RESOLUTION_HIGH')}")
+    if effective_ai_model and "gemini-3" in effective_ai_model:
+        print(f"{log_prefix} PARAMETROS IA (GEMINI 3.0+): Level={effective_thinking_level}, MediaRes={getattr(req, 'media_resolution', 'MEDIA_RESOLUTION_HIGH')}")
     else:
-        print(f"{log_prefix} PARAMETROS IA (GEMINI <3.0): Budget={req.thinking_budget}")
+        print(f"{log_prefix} PARAMETROS IA (GEMINI <3.0): Budget={effective_thinking_budget}")
 
     print(f"{log_prefix} " + "="*50)
-
-    # === VERIFICAR LANGGRAPH (Bot Activo en DB) ===
-    use_langgraph = False
-    bot_config = None
-    try:
-        from core.database import SessionLocal
-        from models import bot_models
-        db = SessionLocal()
-        bot_config = db.query(bot_models.BotConfig).filter(
-            bot_models.BotConfig.userbot_identifier == userbot).first()
-        if bot_config and bot_config.is_active:
-            use_langgraph = True
-
-            try:
-                tools_cfg = json.loads(bot_config.tools_config or "{}")
-            except:
-                tools_cfg = {}
-
-            config_dict = {
-                "api_key": bot_config.apikey or req.apikey,
-                "ai_model": req.ai_model or bot_config.ai_model,
-                "tools_config": tools_cfg,
-                "bot_id": bot_config.id,
-                "userbot_identifier": bot_config.userbot_identifier,
-                "use_google_search": getattr(req, 'use_google_search', False) or bot_config.use_google_search,
-                "use_google_maps": getattr(req, 'use_google_maps', False) or bot_config.use_google_maps,
-                "fallback_models": GEMINI_FALLBACK_MODELS_LIST,
-                "thinking_level": getattr(req, 'thinking_level', bot_config.thinking_level or 'HIGH'),
-                "thinking_budget": getattr(req, 'thinking_budget', bot_config.thinking_budget or 0),
-                "server": getattr(req, 'server', ''),
-                "token": getattr(req, 'token', ''),
-                "receiver": getattr(req, 'lineaogruponotificacion', ''),
-                "is_group": getattr(req, 'lineaogrupo', False),
-                "user_phone": req.lineaWA
-            }
-        db.close()
-    except Exception as e:
-        print(f"{log_prefix} ❌ Error verificando BD para LangGraph: {e}")
 
     ai_response_json_payload = None
 
@@ -2517,54 +2523,9 @@ async def handle_incoming_message(req: MessageRequest):
             print(
                 f"{log_prefix} 🤖 [Auto-Save] Nueva configuración de bot guardada (huérfana) en SQLite para el ID: {userbot}")
         else:
-            updated = False
-            if db_bot.system_prompt != req.promt:
-                db_bot.system_prompt = req.promt
-                updated = True
-            if db_bot.ai_model != req.ai_model:
-                db_bot.ai_model = req.ai_model
-                updated = True
-            if db_bot.pais != req.pais:
-                db_bot.pais = req.pais
-                updated = True
-            if db_bot.idioma != req.idioma:
-                db_bot.idioma = req.idioma
-                updated = True
-            if db_bot.delay_seconds != req.delay_seconds:
-                db_bot.delay_seconds = req.delay_seconds
-                updated = True
-            if db_bot.activarnotificacion != req.activarnotificacion:
-                db_bot.activarnotificacion = req.activarnotificacion
-                updated = True
-            if db_bot.estado_notificacion != req.estado:
-                db_bot.estado_notificacion = req.estado
-                updated = True
-            if db_bot.lineaogruponotificacion != req.lineaogruponotificacion:
-                db_bot.lineaogruponotificacion = req.lineaogruponotificacion
-                updated = True
-            
-            new_num = getattr(req, 'numerodemensajes', 30)
-            if db_bot.numerodemensajes != new_num:
-                db_bot.numerodemensajes = new_num
-                updated = True
-            new_temp = getattr(req, 'temperature', 0.5)
-            if db_bot.temperature != new_temp:
-                db_bot.temperature = new_temp
-                updated = True
-            new_topp = getattr(req, 'topP', 0.95)
-            if db_bot.topP != new_topp:
-                db_bot.topP = new_topp
-                updated = True
-            new_level = getattr(req, 'thinking_level', 'HIGH')
-            if db_bot.thinking_level != new_level:
-                db_bot.thinking_level = new_level
-                updated = True
-
-            if updated:
-                db.commit()
-                print(f"{log_prefix} 🤖 [Auto-Save] Detectados cambios en la configuración. Actualizando SQLite...")
-            else:
-                print(f"{log_prefix} 🤖 [Auto-Save] Configuración sin cambios, saltando actualización de SQLite.")
+            # Bot ya existe. NO sobreescribimos la BD con los datos del payload de Baileys
+            # ya que la BD es la fuente de verdad y se actualiza mediante el dashboard.
+            print(f"{log_prefix} 🤖 [Auto-Save] Bot ya existe en BD. Se mantiene la configuración del dashboard.")
                 
         db.close()
     except Exception as e:
