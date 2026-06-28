@@ -2244,12 +2244,48 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             orders_data = {}
 
                                 order_timestamp = int(time.time() * 1000)
-                                order_id = current_task_req_info.lineaWA
+                                
+                                # Formatear lista_productos con emoji 👉 para consistencia visual
+                                def format_detalle_wa(texto: str) -> str:
+                                    if not texto:
+                                        return texto
+                                    lineas = texto.strip().split('\n')
+                                    resultado = []
+                                    for linea in lineas:
+                                        linea_strip = linea.strip()
+                                        if not linea_strip:
+                                            resultado.append('')
+                                            continue
+                                        if (not linea_strip.startswith('👉') and
+                                                not linea_strip.startswith('-') and
+                                                not linea_strip.startswith('•')):
+                                            linea_strip = f"👉 {linea_strip}"
+                                        resultado.append(linea_strip)
+                                    return '\n'.join(resultado)
+                                
+                                detalle_completo_fmt = format_detalle_wa(order_info.get("detalle_completo", ""))
+                                order_info["detalle_completo"] = detalle_completo_fmt
+
+                                is_modification = False
+                                existing_order_id = None
+                                today = datetime.now(dt_timezone.utc).date()
+                                
+                                for oid, odata in orders_data.items():
+                                    if odata.get("phone") == current_task_req_info.lineaWA and odata.get("status") != "Despachados":
+                                        order_ts = odata.get("timestamp", 0)
+                                        if order_ts:
+                                            order_date = datetime.fromtimestamp(order_ts / 1000, tz=dt_timezone.utc).date()
+                                            if order_date == today:
+                                                is_modification = True
+                                                existing_order_id = oid
+                                                break
+                                
+                                order_id = existing_order_id if existing_order_id else f"ORDER_{int(time.time())}_{current_task_req_info.lineaWA[-4:]}"
 
                                 # --- NUEVO: Control estricto de duplicados por contenido del pedido ---
                                 is_exact_duplicate = False
-                                if order_id in orders_data:
-                                    existing_order = orders_data[order_id]
+                                if is_modification and existing_order_id:
+                                    existing_order = orders_data[existing_order_id]
                                     # Solo comparar si el pedido existente tiene menos de 12 horas
                                     if order_timestamp - existing_order.get("timestamp", 0) < 12 * 3600 * 1000:
                                         def clean_str(t):
@@ -2280,8 +2316,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         "timestamp": current_ts
                                     }
 
-                                    is_modification = False
-                                    if order_id in orders_data and (order_timestamp - orders_data[order_id].get("timestamp", 0) < 12 * 3600 * 1000) and orders_data[order_id].get("status") != "Despachados":
+                                    if is_modification and existing_order_id:
                                         # Es un pedido duplicado/reciente del mismo cliente ANTES de ser despachado. Actualizamos info pero mantenemos el historial/reloj.
                                         orders_data[order_id]["summary"] = order_info.get(
                                             "resumen", "")
@@ -2295,12 +2330,12 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "direccion", "")
                                         orders_data[order_id]["metodo_pago"] = order_info.get(
                                             "metodo_pago", "")
-                                        is_modification = True
                                         print(
                                             f"{log_prefix} Actualizando pedido existente para evitar duplicados en el dashboard.")
                                     else:
                                         # Es un pedido completamente nuevo
                                         orders_data[order_id] = {
+                                            "id": order_id,
                                             "phone": current_task_req_info.lineaWA,
                                             "summary": order_info.get("resumen", ""),
                                             "pedido": order_info.get("pedido", ""),
@@ -2311,7 +2346,8 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "status": "Recientes",
                                             "timestamp": order_timestamp,
                                             "static_duration": 0,
-                                            "history": [{"status": "Recientes", "timestamp": order_timestamp}]
+                                            "history": [{"status": "Recientes", "timestamp": order_timestamp}],
+                                            "origen": "fallback_sdk"
                                         }
 
                                     with open(ORDERS_FILE_PATH, 'w', encoding='utf-8') as f:
@@ -2461,7 +2497,7 @@ async def handle_incoming_message(req: MessageRequest):
                 lineaogruponotificacion=req.lineaogruponotificacion,
                 activaruserbotopcional=req.activaruserbotopcional,
                 userbotopcional=req.userbotopcional,
-                numerodemensajes=getattr(req, 'numerodemensajes', 10),
+                numerodemensajes=getattr(req, 'numerodemensajes', 30),
                 temperature=getattr(req, 'temperature', 0.5),
                 topP=getattr(req, 'topP', 0.95),
                 maxOutputTokens=getattr(req, 'maxOutputTokens', 4096)
@@ -2497,7 +2533,7 @@ async def handle_incoming_message(req: MessageRequest):
                 db_bot.lineaogruponotificacion = req.lineaogruponotificacion
                 updated = True
             
-            new_num = getattr(req, 'numerodemensajes', 10)
+            new_num = getattr(req, 'numerodemensajes', 30)
             if db_bot.numerodemensajes != new_num:
                 db_bot.numerodemensajes = new_num
                 updated = True

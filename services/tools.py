@@ -119,11 +119,8 @@ def enviar_notificacion_tool(
                 
             print(f"[tools/enviar_notificacion/{user_phone}] Pedido actualizado en dashboard (ID: {order_id}). Sin duplicado.")
         else:
-            # Pedido nuevo — usar teléfono como order_id (mismo esquema que main.py)
-            order_id = user_phone
-            # Si ya existe ese ID pero está Despachado, agregar timestamp para no pisarlo
-            if order_id in orders_data and orders_data[order_id].get("status") == "Despachados":
-                order_id = f"{user_phone}_{int(time.time())}"
+            # Pedido nuevo — usar prefijo ORDER_ original
+            order_id = f"ORDER_{int(time.time())}_{user_phone[-4:]}"
 
             orders_data[order_id] = {
                 "id": order_id,
