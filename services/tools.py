@@ -25,7 +25,9 @@ def enviar_notificacion_tool(
     """Envía una notificación al vendedor y guarda el pedido en el dashboard de ventas.
     Úsala SOLO cuando se haya concretado un pedido final.
     Debes extraer de la conversación el resumen general, la lista de productos, el total a cobrar, la dirección y el método de pago.
-    Si algún dato no existe o no aplica, pasa una cadena vacía o "N/A".
+    
+    IMPORTANTE PARA DIRECCIÓN: La 'direccion_envio' DEBE ser SIEMPRE la dirección literal y explícita del cliente. Si el cliente dice "la misma dirección de siempre" o la dirección ya se mencionó en el historial, DEBES buscarla en el contexto y escribirla completa. NUNCA escribas "N/A" o "Ya registrada" si la dirección es conocida o se puede deducir del historial.
+    Solo si algún dato realmente no existe o no aplica bajo ninguna circunstancia, pasa una cadena vacía.
     """
     import httpx
     import json
