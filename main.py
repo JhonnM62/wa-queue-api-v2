@@ -2249,17 +2249,27 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 def format_detalle_wa(texto: str) -> str:
                                     if not texto:
                                         return texto
+                                        
+                                    import re
+                                    # Separar por comas si el siguiente elemento parece ser un producto (ej. "1 x ", "2x")
+                                    texto = re.sub(r',\s*(?=\d+\s*[xX]\s)', '\n', texto)
+                                    
+                                    # También separar si es simplemente una lista separada por comas en una sola línea
+                                    if '\n' not in texto and ',' in texto:
+                                        texto = texto.replace(',', '\n')
+                                        
                                     lineas = texto.strip().split('\n')
                                     resultado = []
                                     for linea in lineas:
                                         linea_strip = linea.strip()
+                                        # Quitar guiones o comas iniciales/finales
+                                        linea_strip = linea_strip.lstrip('-•, ').rstrip(', ')
                                         if not linea_strip:
-                                            resultado.append('')
                                             continue
-                                        if (not linea_strip.startswith('👉') and
-                                                not linea_strip.startswith('-') and
-                                                not linea_strip.startswith('•')):
+                                            
+                                        if not linea_strip.startswith('👉'):
                                             linea_strip = f"👉 {linea_strip}"
+                                            
                                         resultado.append(linea_strip)
                                     return '\n'.join(resultado)
                                 
