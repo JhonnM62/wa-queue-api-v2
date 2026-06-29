@@ -2473,6 +2473,7 @@ async def handle_incoming_message(req: MessageRequest):
     print(f"{log_prefix}    - activarnotificacion: {req.activarnotificacion}")
     print(f"{log_prefix}    - estado para notificar: {req.estado}")
     print(f"{log_prefix}    - lineaogruponotificacion: {req.lineaogruponotificacion}")
+    print(f"{log_prefix}    - prompt recibido (primeros 50 chars): {str(req.promt)[:50]}...")
 
     required_fields_map = {
         "lineaWA": req.lineaWA, "userbot": req.userbot,
@@ -2524,10 +2525,13 @@ async def handle_incoming_message(req: MessageRequest):
                 f"{log_prefix} 🤖 [Auto-Save] Nueva configuración de bot guardada (huérfana) en SQLite para el ID: {userbot}")
         else:
             updated = False
-            # NOTA: NO sincronizamos 'system_prompt' ni 'ai_model' desde la petición
-            # porque la fuente de verdad es el Dashboard. Si lo hiciéramos, Baileys (que lee de MongoDB viejo)
-            # sobreescribiría lo que el usuario guardó en el Dashboard.
-            
+            # Sincronizar campos principales de la petición vieja al nuevo esquema
+            if db_bot.system_prompt != req.promt:
+                db_bot.system_prompt = req.promt
+                updated = True
+            if db_bot.ai_model != req.ai_model:
+                db_bot.ai_model = req.ai_model
+                updated = True
             if db_bot.pais != req.pais:
                 db_bot.pais = req.pais
                 updated = True
@@ -2545,6 +2549,23 @@ async def handle_incoming_message(req: MessageRequest):
                 updated = True
             if db_bot.lineaogruponotificacion != req.lineaogruponotificacion:
                 db_bot.lineaogruponotificacion = req.lineaogruponotificacion
+                updated = True
+            
+            new_num = getattr(req, 'numerodemensajes', 30)
+            if db_bot.numerodemensajes != new_num:
+                db_bot.numerodemensajes = new_num
+                updated = True
+            new_temp = getattr(req, 'temperature', 0.5)
+            if db_bot.temperature != new_temp:
+                db_bot.temperature = new_temp
+                updated = True
+            new_topp = getattr(req, 'topP', 0.95)
+            if db_bot.topP != new_topp:
+                db_bot.topP = new_topp
+                updated = True
+            new_level = getattr(req, 'thinking_level', 'HIGH')
+            if db_bot.thinking_level != new_level:
+                db_bot.thinking_level = new_level
                 updated = True
 
             if updated:
