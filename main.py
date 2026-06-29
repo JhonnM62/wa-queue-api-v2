@@ -2460,6 +2460,8 @@ async def handle_incoming_message(req: MessageRequest):
     phone, userbot = req.lineaWA, req.userbot
     if getattr(req, "activaruserbotopcional", False) and getattr(req, "userbotopcional", None):
         userbot = req.userbotopcional.strip()
+        req.userbot = userbot  # 🔧 IMPORTANTE: Actualizar el req original para que se use en TODAS partes
+
 
     new_fragment = req.mensaje_reciente.strip(
     ) if req.mensaje_reciente and isinstance(req.mensaje_reciente, str) else ""
