@@ -2523,9 +2523,55 @@ async def handle_incoming_message(req: MessageRequest):
             print(
                 f"{log_prefix} 🤖 [Auto-Save] Nueva configuración de bot guardada (huérfana) en SQLite para el ID: {userbot}")
         else:
-            # Bot ya existe. NO sobreescribimos la BD con los datos del payload de Baileys
-            # ya que la BD es la fuente de verdad y se actualiza mediante el dashboard.
-            print(f"{log_prefix} 🤖 [Auto-Save] Bot ya existe en BD. Se mantiene la configuración del dashboard.")
+            updated = False
+            # Sincronizar campos principales de la petición vieja al nuevo esquema
+            if db_bot.system_prompt != req.promt:
+                db_bot.system_prompt = req.promt
+                updated = True
+            if db_bot.ai_model != req.ai_model:
+                db_bot.ai_model = req.ai_model
+                updated = True
+            if db_bot.pais != req.pais:
+                db_bot.pais = req.pais
+                updated = True
+            if db_bot.idioma != req.idioma:
+                db_bot.idioma = req.idioma
+                updated = True
+            if db_bot.delay_seconds != req.delay_seconds:
+                db_bot.delay_seconds = req.delay_seconds
+                updated = True
+            if db_bot.activarnotificacion != req.activarnotificacion:
+                db_bot.activarnotificacion = req.activarnotificacion
+                updated = True
+            if db_bot.estado_notificacion != req.estado:
+                db_bot.estado_notificacion = req.estado
+                updated = True
+            if db_bot.lineaogruponotificacion != req.lineaogruponotificacion:
+                db_bot.lineaogruponotificacion = req.lineaogruponotificacion
+                updated = True
+            
+            new_num = getattr(req, 'numerodemensajes', 30)
+            if db_bot.numerodemensajes != new_num:
+                db_bot.numerodemensajes = new_num
+                updated = True
+            new_temp = getattr(req, 'temperature', 0.5)
+            if db_bot.temperature != new_temp:
+                db_bot.temperature = new_temp
+                updated = True
+            new_topp = getattr(req, 'topP', 0.95)
+            if db_bot.topP != new_topp:
+                db_bot.topP = new_topp
+                updated = True
+            new_level = getattr(req, 'thinking_level', 'HIGH')
+            if db_bot.thinking_level != new_level:
+                db_bot.thinking_level = new_level
+                updated = True
+
+            if updated:
+                db.commit()
+                print(f"{log_prefix} 🤖 [Auto-Save] Detectados cambios en la configuración. Actualizando SQLite...")
+            else:
+                print(f"{log_prefix} 🤖 [Auto-Save] Configuración sin cambios, saltando actualización de SQLite.")
                 
         db.close()
     except Exception as e:
