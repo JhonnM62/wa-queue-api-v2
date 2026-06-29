@@ -1139,8 +1139,6 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
     # Extraer los datos y limpiarlos de espacios en blanco
     phone = req.lineaWA.strip() if req.lineaWA else None
     userbot = req.userbot.strip() if req.userbot else None
-    if getattr(req, "activaruserbotopcional", False) and getattr(req, "userbotopcional", None):
-        userbot = req.userbotopcional.strip()
 
     log_prefix = f"[{userbot}/{phone}]"
 
