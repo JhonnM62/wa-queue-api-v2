@@ -465,7 +465,7 @@ async def get_latest_control_reaction_timestamps_and_push_name(userbot: str, tok
                             is_reacted_to_msg_from_bot = reaction_data.get(
                                 'key', {}).get('fromMe', False)
 
-                            if is_reacting_msg_from_bot and is_reacted_to_msg_from_bot:
+                            if is_reacting_msg_from_bot:
                                 if reaction_text == '✋' and reaction_ts_ms > latest_pause_ts_ms:
                                     latest_pause_ts_ms = reaction_ts_ms
                                     print(
@@ -525,7 +525,7 @@ async def get_latest_control_reaction_timestamps(userbot: str, token: str, phone
                             is_reacted_to_msg_from_bot = reaction_data.get(
                                 'key', {}).get('fromMe', False)
 
-                            if is_reacting_msg_from_bot and is_reacted_to_msg_from_bot:
+                            if is_reacting_msg_from_bot:
                                 if reaction_text == '✋' and reaction_ts_ms > latest_pause_ts_ms:
                                     latest_pause_ts_ms = reaction_ts_ms
                                     print(
