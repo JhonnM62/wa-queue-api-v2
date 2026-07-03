@@ -1156,7 +1156,7 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
 
     log_prefix = f"[{userbot}/{phone}]"
 
-    base_text_from_fragments = ", ".join(message_fragments).strip()
+    base_text_from_fragments = "\n".join(message_fragments).strip()
 
     history_file = hist_file_path(userbot, phone)
     history_list_from_file: List[Dict[str, Any]] = []
@@ -1396,13 +1396,13 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
         **prompt_data)
 
     # LOG para mostrar el prompt final y el contenido que se enviará a la IA
-    # print(f"{log_prefix} ===== PROMPT Y CONTENIDO ENVIADO A LA IA =====")
-    # print(f"{log_prefix} USER_CONTENT (final_content_for_ai):")
-    # print(f"{log_prefix} {final_content_for_ai}")
-    # print(f"{log_prefix} " + "="*50)
-    # print(f"{log_prefix} SYSTEM_INSTRUCTION (prompt final):")
-    # print(f"{log_prefix} {current_prompt_text_for_system_instruction}")
-    # print(f"{log_prefix} " + "="*50)
+    print(f"{log_prefix} ===== PROMPT Y CONTENIDO ENVIADO A LA IA =====")
+    print(f"{log_prefix} USER_CONTENT (final_content_for_ai):")
+    print(f"{log_prefix} {final_content_for_ai}")
+    print(f"{log_prefix} " + "="*50)
+    print(f"{log_prefix} SYSTEM_INSTRUCTION (prompt final):")
+    print(f"{log_prefix} {current_prompt_text_for_system_instruction}")
+    print(f"{log_prefix} " + "="*50)
     print(f"{log_prefix} PAIS: {pais}")
     print(f"{log_prefix} ZONA_HORARIA: {timezone_str}")
     print(f"{log_prefix} FECHA_HORA_FORMATEADA: {formatted_dt_prompt}")
@@ -2185,10 +2185,15 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
             return
 
         actual_fragments = [f.strip() for f in task_info['fragments'] if f.strip()]
-        # Limpiamos los fragmentos para que si llega uno nuevo, no duplique lo que ya vamos a mandar
-        # pero MANTENEMOS la tarea en processing_tasks para poder cancelarla si entra un nuevo webhook.
-        processing_tasks[task_key]['fragments'] = []
         user_push_name = task_info.get('user_push_name', current_task_req_info.userbot)
+
+        # ✅ FIX CRÍTICO: Eliminar la tarea de processing_tasks ANTES de llamar a la IA.
+        # Esto asegura que si entra un nuevo mensaje mientras Gemini procesa,
+        # se cree una NUEVA tarea con un nuevo timer, en lugar de guardarse en
+        # una lista huérfana que será borrada al terminar.
+        if task_key in processing_tasks:
+            if processing_tasks[task_key].get('task') is asyncio.current_task():
+                del processing_tasks[task_key]
 
         if not actual_fragments:
             print(f"{log_prefix} Tarea {task_key}: No hay fragmentos válidos para enviar a la IA.")
@@ -2483,6 +2488,7 @@ async def handle_incoming_message(req: MessageRequest):
     print(f"{log_prefix}    - activarnotificacion: {req.activarnotificacion}")
     print(f"{log_prefix}    - estado para notificar: {req.estado}")
     print(f"{log_prefix}    - lineaogruponotificacion: {req.lineaogruponotificacion}")
+    print(f"{log_prefix}    - mensaje_reciente: {req.mensaje_reciente}")
     print(f"{log_prefix}    - prompt recibido (primeros 50 chars): {str(req.promt)[:50]}...")
 
     required_fields_map = {
