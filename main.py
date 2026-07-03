@@ -410,6 +410,7 @@ async def get_latest_control_reaction_timestamps_and_push_name(userbot: str, tok
     reaction_check_url_val = f"{reaction_api_base_url}/chats/{jid}?id={userbot}&cursor_fromMe=false&isGroup=false&limit=50"
     headers = {"x-access-token": token}
     latest_pause_ts_ms, latest_unpause_ts_ms = 0, 0
+    reaction_state = {} # Rastrea la ultima reaccion por mensaje: msg_id -> (text, ts_ms)
     user_push_name = ""
 
     try:
@@ -445,9 +446,9 @@ async def get_latest_control_reaction_timestamps_and_push_name(userbot: str, tok
                         # Procesar reacciones de control
                         if 'message' in msg and 'reactionMessage' in msg['message']:
                             reaction_data = msg['message']['reactionMessage']
-                            reaction_text = reaction_data.get('text')
+                            reaction_text = reaction_data.get('text', '')
                             reaction_ts_ms_raw = reaction_data.get(
-                                'senderTimestampMs')
+                                'senderTimestampMs', 0)
 
                             # Usar la nueva función para convertir el timestamp
                             reaction_ts_ms = convert_timestamp_to_ms(
@@ -457,26 +458,32 @@ async def get_latest_control_reaction_timestamps_and_push_name(userbot: str, tok
                             print(
                                 f"{log_prefix} Procesando reacción: texto='{reaction_text}', timestamp_raw={reaction_ts_ms_raw}, timestamp_ms={reaction_ts_ms}")
 
-                            if not reaction_text or reaction_ts_ms <= 0:
+                            if reaction_ts_ms <= 0:
                                 continue
 
                             is_reacting_msg_from_bot = msg.get(
                                 'key', {}).get('fromMe', False)
-                            is_reacted_to_msg_from_bot = reaction_data.get(
-                                'key', {}).get('fromMe', False)
+                            reacted_msg_id = reaction_data.get('key', {}).get('id')
 
-                            if is_reacting_msg_from_bot:
-                                if reaction_text == '✋' and reaction_ts_ms > latest_pause_ts_ms:
-                                    latest_pause_ts_ms = reaction_ts_ms
-                                    print(
-                                        f"{log_prefix} Nueva reacción de pausa detectada: {reaction_ts_ms}")
-                                elif reaction_text == '✅' and reaction_ts_ms > latest_unpause_ts_ms:
-                                    latest_unpause_ts_ms = reaction_ts_ms
-                                    print(
-                                        f"{log_prefix} Nueva reacción de despausa detectada: {reaction_ts_ms}")
+                            if is_reacting_msg_from_bot and reacted_msg_id:
+                                # Guardar siempre la última reacción (por timestamp) para este mensaje original
+                                current_recorded = reaction_state.get(reacted_msg_id)
+                                if not current_recorded or reaction_ts_ms >= current_recorded[1]:
+                                    reaction_state[reacted_msg_id] = (reaction_text, reaction_ts_ms)
                     except Exception as e_inner:
                         print(
                             f"{log_prefix} Error processing one reaction: {e_inner} Data: {msg.get('message', {}).get('reactionMessage')}")
+
+                if reaction_state:
+                    for msg_id, (text, ts) in reaction_state.items():
+                        if text == '✋':
+                            if ts > latest_pause_ts_ms:
+                                latest_pause_ts_ms = ts
+                                print(f"{log_prefix} Nueva reacción de pausa detectada: {ts}")
+                        elif text == '✅':
+                            if ts > latest_unpause_ts_ms:
+                                latest_unpause_ts_ms = ts
+                                print(f"{log_prefix} Nueva reacción de despausa detectada: {ts}")
 
                 return latest_pause_ts_ms, latest_unpause_ts_ms, user_push_name
             else:
@@ -495,6 +502,7 @@ async def get_latest_control_reaction_timestamps(userbot: str, token: str, phone
     reaction_check_url_val = f"{reaction_api_base_url}/chats/{jid}?id={userbot}&cursor_fromMe=false&isGroup=false&limit=50"
     headers = {"x-access-token": token}
     latest_pause_ts_ms, latest_unpause_ts_ms = 0, 0
+    reaction_state = {}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(reaction_check_url_val, headers=headers, timeout=15.0)
@@ -505,9 +513,9 @@ async def get_latest_control_reaction_timestamps(userbot: str, token: str, phone
                     try:
                         if 'message' in msg and 'reactionMessage' in msg['message']:
                             reaction_data = msg['message']['reactionMessage']
-                            reaction_text = reaction_data.get('text')
+                            reaction_text = reaction_data.get('text', '')
                             reaction_ts_ms_raw = reaction_data.get(
-                                'senderTimestampMs')
+                                'senderTimestampMs', 0)
 
                             # Usar la nueva función para convertir el timestamp
                             reaction_ts_ms = convert_timestamp_to_ms(
@@ -517,26 +525,32 @@ async def get_latest_control_reaction_timestamps(userbot: str, token: str, phone
                             print(
                                 f"{log_prefix} Procesando reacción: texto='{reaction_text}', timestamp_raw={reaction_ts_ms_raw}, timestamp_ms={reaction_ts_ms}")
 
-                            if not reaction_text or reaction_ts_ms <= 0:
+                            if reaction_ts_ms <= 0:
                                 continue
 
                             is_reacting_msg_from_bot = msg.get(
                                 'key', {}).get('fromMe', False)
-                            is_reacted_to_msg_from_bot = reaction_data.get(
-                                'key', {}).get('fromMe', False)
+                            reacted_msg_id = reaction_data.get('key', {}).get('id')
 
-                            if is_reacting_msg_from_bot:
-                                if reaction_text == '✋' and reaction_ts_ms > latest_pause_ts_ms:
-                                    latest_pause_ts_ms = reaction_ts_ms
-                                    print(
-                                        f"{log_prefix} Nueva reacción de pausa detectada: {reaction_ts_ms}")
-                                elif reaction_text == '✅' and reaction_ts_ms > latest_unpause_ts_ms:
-                                    latest_unpause_ts_ms = reaction_ts_ms
-                                    print(
-                                        f"{log_prefix} Nueva reacción de despausa detectada: {reaction_ts_ms}")
+                            if is_reacting_msg_from_bot and reacted_msg_id:
+                                current_recorded = reaction_state.get(reacted_msg_id)
+                                if not current_recorded or reaction_ts_ms >= current_recorded[1]:
+                                    reaction_state[reacted_msg_id] = (reaction_text, reaction_ts_ms)
                     except Exception as e_inner:
                         print(
                             f"{log_prefix} Error processing one reaction: {e_inner} Data: {msg.get('message', {}).get('reactionMessage')}")
+
+                if reaction_state:
+                    for msg_id, (text, ts) in reaction_state.items():
+                        if text == '✋':
+                            if ts > latest_pause_ts_ms:
+                                latest_pause_ts_ms = ts
+                                print(f"{log_prefix} Nueva reacción de pausa detectada: {ts}")
+                        elif text == '✅':
+                            if ts > latest_unpause_ts_ms:
+                                latest_unpause_ts_ms = ts
+                                print(f"{log_prefix} Nueva reacción de despausa detectada: {ts}")
+
                 return latest_pause_ts_ms, latest_unpause_ts_ms
             else:
                 print(
