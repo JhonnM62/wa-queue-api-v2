@@ -1396,16 +1396,16 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
         **prompt_data)
 
     # LOG para mostrar el prompt final y el contenido que se enviará a la IA
-    print(f"{log_prefix} ===== PROMPT Y CONTENIDO ENVIADO A LA IA =====")
-    print(f"{log_prefix} USER_CONTENT (final_content_for_ai):")
-    print(f"{log_prefix} {final_content_for_ai}")
-    print(f"{log_prefix} " + "="*50)
-    print(f"{log_prefix} SYSTEM_INSTRUCTION (prompt final):")
-    print(f"{log_prefix} {current_prompt_text_for_system_instruction}")
-    print(f"{log_prefix} " + "="*50)
-    print(f"{log_prefix} PAIS: {pais}")
-    print(f"{log_prefix} ZONA_HORARIA: {timezone_str}")
-    print(f"{log_prefix} FECHA_HORA_FORMATEADA: {formatted_dt_prompt}")
+    # print(f"{log_prefix} ===== PROMPT Y CONTENIDO ENVIADO A LA IA =====")
+    # print(f"{log_prefix} USER_CONTENT (final_content_for_ai):")
+    # print(f"{log_prefix} {final_content_for_ai}")
+    # print(f"{log_prefix} " + "="*50)
+    # print(f"{log_prefix} SYSTEM_INSTRUCTION (prompt final):")
+    # print(f"{log_prefix} {current_prompt_text_for_system_instruction}")
+    # print(f"{log_prefix} " + "="*50)
+    # print(f"{log_prefix} PAIS: {pais}")
+    # print(f"{log_prefix} ZONA_HORARIA: {timezone_str}")
+    # print(f"{log_prefix} FECHA_HORA_FORMATEADA: {formatted_dt_prompt}")
 
     # Priorizar DB para configs
     effective_ai_model = bot_config.ai_model if (bot_config and bot_config.ai_model) else req.ai_model
@@ -1715,19 +1715,15 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                         # Salir del bucle de reintentos (attempt), para probar el siguiente modelo.
                         break
 
-                # Si después del bucle de reintentos (attempt) se obtuvo un payload, salir del bucle de modelos
-                if ai_response_json_payload is not None:
-                    break
-
             # Si el payload sigue siendo None después de los reintentos para el modelo actual,
             # el bucle de modelos (current_model_sdk) continuará con el siguiente modelo.
-                if ai_response_json_payload is not None:
-                    # Salir del bucle de modelos (current_model_sdk) porque tuvimos éxito
-                    break
-                else:
-                    print(
-                        f"{log_prefix} ❌ No se pudo obtener respuesta válida del modelo {current_model_sdk} tras todos los intentos.")
-                # Continuar al siguiente modelo en model_names_to_try_ordered
+            if ai_response_json_payload is not None:
+                # Salir del bucle de modelos (current_model_sdk) porque tuvimos éxito
+                break
+            else:
+                print(
+                    f"{log_prefix} ❌ No se pudo obtener respuesta válida del modelo {current_model_sdk} tras todos los intentos.")
+            # Continuar al siguiente modelo en model_names_to_try_ordered
 
     # ----- Fin del bucle de modelos -----
 
