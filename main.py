@@ -1441,12 +1441,23 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 formatted_dt_prompt
             )
 
+            # Limpieza básica
+            cleaned_raw_text = raw_text_from_gemini.strip()
+            if cleaned_raw_text.startswith("```json"):
+                cleaned_raw_text = cleaned_raw_text[7:]
+            if cleaned_raw_text.startswith("```"):
+                cleaned_raw_text = cleaned_raw_text[3:]
+            if cleaned_raw_text.endswith("```"):
+                cleaned_raw_text = cleaned_raw_text[:-3]
+            cleaned_raw_text = cleaned_raw_text.strip()
+
             try:
-                ai_response_json_payload = json.loads(raw_text_from_gemini)
+                ai_response_json_payload = json.loads(cleaned_raw_text)
                 print(f"{log_prefix} ✅ [LangGraph] Parseo exitoso del JSON.")
             except json.JSONDecodeError as e:
                 print(
-                    f"{log_prefix} ❌ Error decodificando JSON de LangGraph: {e}. Payload: {raw_text_from_gemini}")
+                    f"{log_prefix} ❌ Error decodificando JSON de LangGraph: {e}. Intentando reparación...")
+                
                 # Intentar extraer JSON de la respuesta bruta si hay markdown json
                 import re
                 json_match = re.search(
@@ -1459,10 +1470,24 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                             f"{log_prefix} ✅ [LangGraph] Parseo exitoso tras extraer bloque markdown.")
                     except Exception as ex:
                         pass
+                
+                # Intentar extraer el primer { y el último }
+                if ai_response_json_payload is None:
+                    start_idx = cleaned_raw_text.find('{')
+                    end_idx = cleaned_raw_text.rfind('}')
+                    if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                        try:
+                            ai_response_json_payload = json.loads(cleaned_raw_text[start_idx:end_idx+1])
+                            print(f"{log_prefix} ✅ [LangGraph] Parseo exitoso tras extraer bloque con llaves {{}}.")
+                        except Exception as ex:
+                            pass
 
                 if ai_response_json_payload is None:
-                    ai_response_json_payload = {"1": {
-                        "tipo": "mensaje", "mensaje": raw_text_from_gemini}, "estado_conversacion": "procesando"}
+                    if "estado_conversacion" in cleaned_raw_text or '"1":' in cleaned_raw_text:
+                        print(f"{log_prefix} ❌ LangGraph devolvió un JSON roto. Se forzará fallback a SDK.")
+                    else:
+                        ai_response_json_payload = {"1": {
+                            "tipo": "mensaje", "mensaje": cleaned_raw_text}, "estado_conversacion": "procesando"}
 
         except Exception as e:
             print(
