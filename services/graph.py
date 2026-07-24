@@ -90,10 +90,18 @@ def call_model(state: AgentState):
     thinking_budget = bot_config.get("thinking_budget", 0)
     thinking_level = bot_config.get("thinking_level", "HIGH")
 
-    # Construir tools habilitadas dinámicamente
+    # Construir tools habilitadas dinámicamente y reglas condicionales
     available_tools = []
+    reglas_herramientas_extra = ""
+    
     if tools_cfg.get("buscar_catalogo", True):
         available_tools.append(buscar_catalogo_tool)
+        reglas_herramientas_extra += (
+            "⚠️ REGLA ESTRICTA E INQUEBRANTABLE (RAG):\n"
+            "¡TIENES QUE USAR TU HERRAMIENTA DE CATÁLOGO (`buscar_catalogo_tool`) EN EL 100% DE LOS PEDIDOS!\n"
+            "Sin importar si ya crees saber el precio, DEBES usar la herramienta SIEMPRE para confirmar precios actuales, tamaños y disponibilidad ANTES de dar el detalle del pedido. ¡NUNCA INVENTES PRECIOS!\n\n"
+        )
+        
     if tools_cfg.get("enviar_notificacion", True):
         available_tools.append(enviar_notificacion_tool)
         
@@ -119,8 +127,9 @@ def call_model(state: AgentState):
 
     # Lógica para inyectar System Prompt como primer mensaje si no existe al inicio
     if not messages or not isinstance(messages[0], SystemMessage):
+        final_system_prompt = system_prompt + "\n\n" + reglas_herramientas_extra + INSTRUCCIONES_JSON
         messages = [
-            SystemMessage(content=system_prompt + "\n\n" + INSTRUCCIONES_JSON)
+            SystemMessage(content=final_system_prompt)
         ] + messages
 
     # Obtener modelos de fallback si vienen de config_dict, o construir lista local

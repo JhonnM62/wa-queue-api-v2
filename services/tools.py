@@ -5,8 +5,9 @@ from services.rag_service import search_knowledge
 
 @tool
 def buscar_catalogo_tool(query: str, config: RunnableConfig) -> str:
-    """Busca información en el catálogo o base de conocimiento del chatbot.
-    Úsala SIEMPRE que el usuario pregunte por precios, productos, servicios, horarios o dudas de negocio.
+    """Busca información en el catálogo o base de conocimiento del chatbot (precios, productos, etc).
+    ES OBLIGATORIO USAR ESTA HERRAMIENTA SIEMPRE QUE VAYAS A ARMAR UN PEDIDO O DAR UN PRECIO.
+    NUNCA asumas los precios, usa siempre esta herramienta para verificar el precio actual y el tamaño disponible.
     """
     bot_id = config["configurable"].get("bot_id")
     api_key = config["configurable"].get("config_dict", {}).get("api_key")

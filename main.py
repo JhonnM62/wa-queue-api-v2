@@ -206,7 +206,7 @@ app = FastAPI(title="WhatsApp Message Processor",
 
 @app.on_event("startup")
 async def startup_event():
-    print("🚀 Iniciando aplicación y verificando esquema de BD...")
+    print("Iniciando aplicación y verificando esquema de BD...")
     try:
         from core.database import SQLALCHEMY_DATABASE_URL
         db_path = SQLALCHEMY_DATABASE_URL.replace("sqlite:///", "")
@@ -250,9 +250,9 @@ async def startup_event():
         """)
         conn.commit()
         conn.close()
-        print("✅ [Migración BD] Verificación de esquema completada.")
+        print("[Migración BD] Verificación de esquema completada.")
     except Exception as e:
-        print(f"❌ [Migración BD] Error general durante la migración: {e}")
+        print(f"[Migración BD] Error general durante la migración: {e}")
 
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
