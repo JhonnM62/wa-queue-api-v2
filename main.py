@@ -1458,28 +1458,43 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 print(
                     f"{log_prefix} ❌ Error decodificando JSON de LangGraph: {e}. Intentando reparación...")
                 
-                # Intentar extraer JSON de la respuesta bruta si hay markdown json
                 import re
-                json_match = re.search(
-                    r'```(?:json)?(.*?)```', raw_text_from_gemini, re.DOTALL)
-                if json_match:
+                
+                # Estrategia 1: Extraer el primer JSON válido completo usando el decoder posicional
+                # Esto resuelve el error 'Extra data' (contenido duplicado al final)
+                if ai_response_json_payload is None:
                     try:
-                        ai_response_json_payload = json.loads(
-                            json_match.group(1).strip())
-                        print(
-                            f"{log_prefix} ✅ [LangGraph] Parseo exitoso tras extraer bloque markdown.")
-                    except Exception as ex:
+                        decoder = json.JSONDecoder()
+                        start_idx = cleaned_raw_text.find('{')
+                        if start_idx != -1:
+                            obj, end_idx = decoder.raw_decode(cleaned_raw_text, start_idx)
+                            ai_response_json_payload = obj
+                            print(f"{log_prefix} ✅ [LangGraph] Parseo exitoso extrayendo primer JSON válido (raw_decode).")
+                    except Exception:
                         pass
                 
-                # Intentar extraer el primer { y el último }
+                # Estrategia 2: Extraer bloque markdown ```json ... ```
+                if ai_response_json_payload is None:
+                    json_match = re.search(
+                        r'```(?:json)?(.*?)```', raw_text_from_gemini, re.DOTALL)
+                    if json_match:
+                        try:
+                            ai_response_json_payload = json.loads(
+                                json_match.group(1).strip())
+                            print(
+                                f"{log_prefix} ✅ [LangGraph] Parseo exitoso tras extraer bloque markdown.")
+                        except Exception:
+                            pass
+                
+                # Estrategia 3: rfind de la ultima llave de cierre
                 if ai_response_json_payload is None:
                     start_idx = cleaned_raw_text.find('{')
                     end_idx = cleaned_raw_text.rfind('}')
                     if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
                         try:
                             ai_response_json_payload = json.loads(cleaned_raw_text[start_idx:end_idx+1])
-                            print(f"{log_prefix} ✅ [LangGraph] Parseo exitoso tras extraer bloque con llaves {{}}.")
-                        except Exception as ex:
+                            print(f"{log_prefix} ✅ [LangGraph] Parseo exitoso tras recortar al último '}}'. ")
+                        except Exception:
                             pass
 
                 if ai_response_json_payload is None:
@@ -1603,52 +1618,52 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                             error_detail_str = f"Falta 'estado_conversacion' o tipo incorrecto (modelo {current_model_sdk}): {str(parsed_json)[:200]}"
                             print(f"{log_prefix} ❌ {error_detail_str}")
                             ai_response_json_payload = None
-                            # No reintentar este modelo por este error de formato, pasar al siguiente.
-                            break  # Salir del bucle de reintentos para este modelo
                     except json.JSONDecodeError as json_e:
                         last_overall_error_type = f"json_decode_error_model_{current_model_sdk}"
                         print(
                             f"{log_prefix} ❌ Gemini JSON decode error (modelo {current_model_sdk}): {json_e}. Intentando reparar...")
 
-                        # Intento de reparación de JSON incompleto (muy común en respuestas cortadas)
+                        # Intento de reparación del JSON del SDK
+                        repaired = None
                         try:
                             import re
-                            # Intentar cerrar strings, diccionarios y comillas simples que falten al final
-                            repaired_text = cleaned_raw_text
-                            if repaired_text.count('"') % 2 != 0:
-                                repaired_text += '"'
-                            if not repaired_text.endswith("}"):
-                                # A veces se corta a la mitad de un objeto anidado, intentar cerrar lo básico
-                                repaired_text += "}}" if repaired_text.endswith(
-                                    '"') else '"}}'
+                            # Estrategia 1: raw_decode para extraer el primer JSON válido (resuelve 'Extra data')
+                            decoder = json.JSONDecoder()
+                            s_idx = cleaned_raw_text.find('{')
+                            if s_idx != -1:
+                                repaired, _ = decoder.raw_decode(cleaned_raw_text, s_idx)
+                        except Exception:
+                            pass
 
-                            # Limpiar trailing comas antes de cerrar llaves
-                            repaired_text = re.sub(
-                                r',\s*}', '}', repaired_text)
+                        if repaired is None:
+                            try:
+                                # Estrategia 2: Cerrar strings/objetos truncados
+                                repaired_text = cleaned_raw_text
+                                if repaired_text.count('"') % 2 != 0:
+                                    repaired_text += '"'
+                                if not repaired_text.endswith("}"):
+                                    repaired_text += "}}" if repaired_text.endswith('"') else '"}}'  
+                                repaired_text = re.sub(r',\s*}', '}', repaired_text)
+                                repaired = json.loads(repaired_text)
+                            except Exception:
+                                pass
 
-                            parsed_json = json.loads(repaired_text)
-
-                            # Si se logra parsear tras reparar, validar estructura mínima
-                            if isinstance(parsed_json, dict) and "estado_conversacion" in parsed_json:
-                                print(
-                                    f"{log_prefix} ⚠️ JSON reparado exitosamente para modelo {current_model_sdk}.")
-                                ai_response_json_payload = parsed_json
-                                last_overall_error_type = ""
-                                break
-                            else:
-                                raise Exception(
-                                    "JSON reparado pero estructura no válida.")
-                        except Exception as repair_e:
+                        if repaired is not None and isinstance(repaired, dict) and "estado_conversacion" in repaired:
+                            print(f"{log_prefix} ⚠️ JSON reparado exitosamente para modelo {current_model_sdk}.")
+                            ai_response_json_payload = repaired
+                            last_overall_error_type = ""
+                            break
+                        else:
                             print(
-                                f"{log_prefix} ❌ Falló reparación de JSON (modelo {current_model_sdk}): {repair_e}. Raw original: {raw_text_from_gemini[:200]}")
+                                f"{log_prefix} ❌ Falló reparación de JSON (modelo {current_model_sdk}). Raw original: {raw_text_from_gemini[:200]}")
                             ai_response_json_payload = None
 
-                            # Si es el primer intento, vamos a reintentar la llamada al SDK porque a veces Gemini se traba
+                            # Si es el primer intento, vamos a reintentar la llamada al SDK
                             if attempt < max_retries_per_model:
                                 print(
                                     f"{log_prefix} ⏳ Reintentando modelo {current_model_sdk} tras fallo de JSON...")
                                 await asyncio.sleep(2)
-                                continue  # Forzar nuevo intento al SDK
+                                continue
                             else:
                                 break  # Salir al siguiente modelo
 
@@ -1901,14 +1916,24 @@ async def send_whatsapp(server: str, userbot: str, token: str, phone: str, paylo
                     if not item.get("ruta2"):
                         print(f"{log_prefix} Skipping image send, no ruta2.")
                         continue
-                    msg_to_send_content = {"message": {
-                        "image": {"url": item.get("ruta2")}, "caption": item.get("mensaje", "")}}
+                    img_msg: Dict[str, Any] = {"url": item.get("ruta2")}
+                    caption_text = item.get("mensaje", "").strip()
+                    if not caption_text:
+                        print(f"{log_prefix} WARN: imagen sin caption. El modelo no incluyó 'mensaje'. Se usará fallback.")
+                        caption_text = "📸 Aquí te comparto la información."
+                    img_body: Dict[str, Any] = {"image": img_msg, "caption": caption_text}
+                    msg_to_send_content = {"message": img_body}
                 elif tipo == "video":
                     if not item.get("ruta2"):
                         print(f"{log_prefix} Skipping video send, no ruta2.")
                         continue
-                    msg_to_send_content = {"message": {
-                        "video": {"url": item.get("ruta2")}, "caption": item.get("mensaje", "")}}
+                    vid_msg: Dict[str, Any] = {"url": item.get("ruta2")}
+                    vid_caption = item.get("mensaje", "").strip()
+                    if not vid_caption:
+                        print(f"{log_prefix} WARN: video sin caption. El modelo no incluyó 'mensaje'. Se usará fallback.")
+                        vid_caption = "🎥 Aquí te comparto el video."
+                    vid_body: Dict[str, Any] = {"video": vid_msg, "caption": vid_caption}
+                    msg_to_send_content = {"message": vid_body}
                     current_presence_before_send = "recording"
                 elif tipo == "audio":
                     if not item.get("ruta2"):

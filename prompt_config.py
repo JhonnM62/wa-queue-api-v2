@@ -85,11 +85,11 @@ Cada objeto de acción DEBE tener una clave "tipo". Tipos válidos y sus campos 
         -   Requerido: "mensaje" (string con el texto a enviar).
     -   "imagen":
         -   Requerido: "ruta2" (string con la URL pública o ruta accesible del archivo de imagen).
-        -   Opcional: "mensaje" (string, para el pie de foto o caption).
+        -   OBLIGATORIO: "mensaje" (string, SIEMPRE debe incluir un texto descriptivo o caption. NUNCA dejes este campo vacío ni lo omitas).
         -   Opcional: "nombrearchivo" (string, si es relevante para el envío).
     -   "video":
         -   Requerido: "ruta2" (string con la URL pública o ruta accesible del archivo de video).
-        -   Opcional: "mensaje" (string, para el pie de foto o caption).
+        -   OBLIGATORIO: "mensaje" (string, SIEMPRE debe incluir un texto descriptivo o caption. NUNCA dejes este campo vacío ni lo omitas).
     -   "audio":
         -   Requerido: "ruta2" (string con la URL pública o ruta accesible del archivo de audio).
         -   Opcional: "ptt" (boolean, true si es Push-to-Talk).
