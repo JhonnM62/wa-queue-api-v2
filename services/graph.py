@@ -129,9 +129,42 @@ def call_model(state: AgentState):
         else:
             print(f"[{bot_config.get('userbot')}/{bot_config.get('phone')}] WARNING: google.genai is not installed, cannot use Google Search/Maps.")
 
+    # ── Inyección proactiva de RAG en el system prompt ──────────────────────────
+    # Buscar contexto relevante del catálogo ANTES de llamar al LLM.
+    # Esto garantiza que el modelo siempre tenga los precios visibles,
+    # aunque decida no invocar el tool por su cuenta.
+    api_key = bot_config.get("api_key", "")
+    rag_context_block = ""
+    if tools_cfg.get("buscar_catalogo", True) and api_key:
+        try:
+            from services.rag_service import search_knowledge
+            # Extraer el texto del último mensaje humano para hacer la búsqueda
+            last_human_text = ""
+            for m in reversed(messages):
+                if isinstance(m, HumanMessage):
+                    last_human_text = m.content[:300] if m.content else ""
+                    break
+            if not last_human_text:
+                last_human_text = "catálogo productos precios"
+            
+            raw_rag = search_knowledge(bot_id=bot_config.get("bot_id", 0), query=last_human_text, api_key=api_key)
+            if raw_rag and "No se encontró" not in raw_rag:
+                rag_context_block = (
+                    "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "📋 CATÁLOGO ACTUAL (contexto pre-cargado — úsalo para verificar precios y categorías):\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{raw_rag}\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "IMPORTANTE: Estos son los datos reales del catálogo. Úsalos como referencia para todos los precios. "
+                    "Si además necesitas búsquedas específicas puedes invocar el tool buscar_catalogo_tool."
+                )
+                print(f"{log_prefix} [RAG-PROACTIVO] ✅ Catálogo inyectado en system prompt ({len(raw_rag)} chars).")
+        except Exception as rag_err:
+            print(f"{log_prefix} [RAG-PROACTIVO] ⚠️ No se pudo pre-cargar el catálogo: {rag_err}")
+
     # Lógica para inyectar System Prompt como primer mensaje si no existe al inicio
     if not messages or not isinstance(messages[0], SystemMessage):
-        final_system_prompt = system_prompt + "\n\n" + reglas_herramientas_extra + INSTRUCCIONES_JSON
+        final_system_prompt = system_prompt + "\n\n" + reglas_herramientas_extra + INSTRUCCIONES_JSON + rag_context_block
         messages = [
             SystemMessage(content=final_system_prompt)
         ] + messages
