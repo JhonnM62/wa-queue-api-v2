@@ -20,3 +20,4 @@ langchain-chroma
 langchain-community
 pypdf
 python-multipart
+Pillow
