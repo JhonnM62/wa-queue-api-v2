@@ -129,38 +129,41 @@ def call_model(state: AgentState):
         else:
             print(f"[{bot_config.get('userbot')}/{bot_config.get('phone')}] WARNING: google.genai is not installed, cannot use Google Search/Maps.")
 
-    # ── Inyección proactiva de RAG en el system prompt ──────────────────────────
-    # Buscar contexto relevante del catálogo ANTES de llamar al LLM.
-    # Esto garantiza que el modelo siempre tenga los precios visibles,
-    # aunque decida no invocar el tool por su cuenta.
+    # ── Inyección completa del RAG en el system prompt (sin búsqueda por similitud) ──
+    # Se carga TODO el catálogo del bot de una sola vez y se inyecta en el prompt.
+    # Ventajas vs similarity_search:
+    #   - Sin latencia de embeddings ni consultas vectoriales
+    #   - Todos los productos siempre visibles, sin riesgo de que falte alguno
+    #   - Ideal para menús/catálogos pequeños-medianos (típico de un restaurante)
     api_key = bot_config.get("api_key", "")
     rag_context_block = ""
     if tools_cfg.get("buscar_catalogo", True) and api_key:
         try:
-            from services.rag_service import search_knowledge
-            # Extraer el texto del último mensaje humano para hacer la búsqueda
-            last_human_text = ""
-            for m in reversed(messages):
-                if isinstance(m, HumanMessage):
-                    last_human_text = m.content[:300] if m.content else ""
-                    break
-            if not last_human_text:
-                last_human_text = "catálogo productos precios"
-            
-            raw_rag = search_knowledge(bot_id=bot_config.get("bot_id", 0), query=last_human_text, api_key=api_key)
-            if raw_rag and "No se encontró" not in raw_rag:
+            from services.rag_service import get_all_knowledge
+            bot_id_for_rag = bot_config.get("bot_id", 0)
+            all_docs = get_all_knowledge(bot_id=bot_id_for_rag, api_key=api_key)
+
+            if all_docs:
+                # Unir todos los fragmentos del catálogo en un solo texto
+                catalog_text = "\n\n---\n\n".join(
+                    doc["content"].strip() for doc in all_docs if doc.get("content", "").strip()
+                )
                 rag_context_block = (
                     "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "📋 CATÁLOGO ACTUAL (contexto pre-cargado — úsalo para verificar precios y categorías):\n"
+                    "📋 CATÁLOGO COMPLETO DEL NEGOCIO (cargado completo — todos los productos y precios):\n"
+                    "INSTRUCCIÓN: Antes de calcular el precio de cualquier producto, búscalo en este catálogo.\n"
+                    "Lee el campo CATEGORÍA de cada uno para NO confundir comidas con granizados.\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{raw_rag}\n"
+                    f"{catalog_text}\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "IMPORTANTE: Estos son los datos reales del catálogo. Úsalos como referencia para todos los precios. "
-                    "Si además necesitas búsquedas específicas puedes invocar el tool buscar_catalogo_tool."
+                    "REGLA: Estos son los precios REALES. Úsalos para TODOS los productos del pedido, "
+                    "sin importar cuántos pida el cliente a la vez."
                 )
-                print(f"{log_prefix} [RAG-PROACTIVO] ✅ Catálogo inyectado en system prompt ({len(raw_rag)} chars).")
+                print(f"{log_prefix} [RAG-COMPLETO] ✅ Catálogo cargado: {len(all_docs)} fragmentos ({len(catalog_text)} chars).")
+            else:
+                print(f"{log_prefix} [RAG-COMPLETO] ℹ️ Sin documentos RAG para este bot.")
         except Exception as rag_err:
-            print(f"{log_prefix} [RAG-PROACTIVO] ⚠️ No se pudo pre-cargar el catálogo: {rag_err}")
+            print(f"{log_prefix} [RAG-COMPLETO] ⚠️ No se pudo cargar el catálogo: {rag_err}")
 
     # Lógica para inyectar System Prompt como primer mensaje si no existe al inicio
     if not messages or not isinstance(messages[0], SystemMessage):
