@@ -5,9 +5,18 @@ from services.rag_service import search_knowledge
 
 @tool
 def buscar_catalogo_tool(query: str, config: RunnableConfig) -> str:
-    """Busca información en el catálogo o base de conocimiento del chatbot (precios, productos, etc).
+    """Busca información en el catálogo o base de conocimiento del chatbot (precios, productos, categorías).
     ES OBLIGATORIO USAR ESTA HERRAMIENTA SIEMPRE QUE VAYAS A ARMAR UN PEDIDO O DAR UN PRECIO.
-    NUNCA asumas los precios, usa siempre esta herramienta para verificar el precio actual y el tamaño disponible.
+    NUNCA asumas los precios ni la categoría de un producto; usa siempre esta herramienta para verificar.
+
+    INSTRUCCIÓN CRÍTICA AL INTERPRETAR LOS RESULTADOS:
+    - Cada producto en el catálogo tiene un campo CATEGORÍA. Léelo SIEMPRE antes de asignar precio o tipo.
+    - Si CATEGORÍA dice 'Comida' → es hamburguesa/sánduche/perro/salchipapa. Usa su precio de comida. NO es granizado.
+    - Si CATEGORÍA dice 'Granizado' → es bebida en vaso. Aplica precio de granizado.
+    - Si CATEGORÍA dice 'Bebida' → es bebida embotellada/lata. No apliques cobro de tapa.
+    - NUNCA confundas la categoría aunque el nombre suene similar a otra cosa.
+    - Si el resultado no incluye campo CATEGORÍA, usa el precio EXACTO que aparezca en el resultado y clasifica
+      según el contexto (los granizados siempre tienen 'oz' en su descripción o mencionan 'licor'/'sin licor').
     """
     bot_id = config["configurable"].get("bot_id")
     api_key = config["configurable"].get("config_dict", {}).get("api_key")

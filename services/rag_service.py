@@ -68,9 +68,19 @@ async def process_and_store_document(bot_id: int, file: UploadFile, api_key: str
             model = genai.GenerativeModel("gemini-3.5-flash")
             
             prompt = (
-                "Extrae toda la información de este catálogo/menú. "
-                "Lista claramente: 1. Los productos 2. Sus características o ingredientes 3. Sus precios. "
-                "Formatea la respuesta como texto claro y estructurado."
+                "Eres un extractor de menús. Analiza cuidadosamente esta imagen de menú y extrae TODOS los productos.\n"
+                "Para cada producto, escribe una línea en este formato exacto:\n\n"
+                "CATEGORÍA: [tipo de producto: Comida / Granizado / Bebida / Otro]\n"
+                "PRODUCTO: [nombre exacto del producto]\n"
+                "PRECIO: [precio en pesos, tal como aparece]\n"
+                "DESCRIPCIÓN: [ingredientes o detalles si están visibles, si no escribe 'N/A']\n"
+                "---\n\n"
+                "REGLAS IMPORTANTES:\n"
+                "- Los GRANIZADOS son bebidas frías en vaso (12oz, 24oz) con o sin licor.\n"
+                "- La COMIDA son hamburguesas, sánduches, perros calientes, salchipapas y similares.\n"
+                "- NUNCA confundas comidas con granizados aunque tengan nombres parecidos.\n"
+                "- Extrae TODOS los productos visibles sin omitir ninguno.\n"
+                "- Si un producto tiene variantes de tamaño o precio, liéstalas por separado."
             )
             
             import PIL.Image
@@ -89,7 +99,11 @@ async def process_and_store_document(bot_id: int, file: UploadFile, api_key: str
             doc.metadata["bot_id"] = bot_id
             doc.metadata["source"] = file.filename
 
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=400,
+            chunk_overlap=80,
+            separators=["\n---\n", "\n\n", "\n", " "],
+        )
         chunks = text_splitter.split_documents(documents)
 
         vector_store = _get_vector_store(actual_api_key)
@@ -151,10 +165,11 @@ def delete_bot_knowledge(bot_id: int, api_key: str):
         traceback.print_exc()
 
 
-def search_knowledge(bot_id: int, query: str, api_key: str, top_k: int = 3) -> str:
+def search_knowledge(bot_id: int, query: str, api_key: str, top_k: int = 5) -> str:
     """
     Busca en ChromaDB filtrando por bot_id.
-    Requiere la api_key del cliente para inicializar los embeddings.
+    Devuelve los resultados con contexto de fuente para que el modelo pueda
+    identificar correctamente la categoría del producto (comida vs granizado).
     """
     vector_store = _get_vector_store(api_key)
     results = vector_store.similarity_search(
@@ -166,7 +181,24 @@ def search_knowledge(bot_id: int, query: str, api_key: str, top_k: int = 3) -> s
     if not results:
         return "No se encontró información relevante en el catálogo/documentos."
 
-    return "\n\n---\n\n".join([doc.page_content for doc in results])
+    formatted_parts = []
+    for i, doc in enumerate(results, 1):
+        source = doc.metadata.get("source", "catálogo")
+        content = doc.page_content.strip()
+        formatted_parts.append(
+            f"[Resultado {i} — fuente: {source}]\n{content}"
+        )
+
+    header = (
+        "=== RESULTADOS DEL CATÁLOGO ===\n"
+        "INSTRUCCIÓN CRÍTICA: Lee el campo CATEGORÍA de cada producto antes de asignarle precio.\n"
+        "- Si el producto dice CATEGORÍA: Comida → es comida (hamburguesa/sánduche/perro), NO es granizado.\n"
+        "- Si el producto dice CATEGORÍA: Granizado → es bebida en vaso, aplica precio de granizado.\n"
+        "- NUNCA apliques precios de granizado a productos de comida ni viceversa.\n"
+        "================================\n\n"
+    )
+
+    return header + "\n\n---\n\n".join(formatted_parts)
 
 
 def update_single_knowledge(bot_id: int, doc_id: str, new_content: str, api_key: str):
