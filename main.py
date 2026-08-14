@@ -1776,6 +1776,21 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 actions_payload_for_whatsapp = {"1": {"tipo": "mensaje", "mensaje": respuesta_texto}}
                 print(f"{log_prefix} [PARSER FIX] Formato de LangGraph convertido a formato numérico.")
 
+        # Limpiar mensajes de texto vacíos para evitar burbujas en blanco en WhatsApp
+        keys_to_remove = []
+        for k, action in actions_payload_for_whatsapp.items():
+            if action.get("tipo") == "mensaje":
+                msg = action.get("mensaje", "")
+                if not msg or not msg.strip():
+                    keys_to_remove.append(k)
+        for k in keys_to_remove:
+            del actions_payload_for_whatsapp[k]
+
+        # Si tras limpiar no quedan acciones, pero estamos confirmando pedido, usar fallback
+        if not actions_payload_for_whatsapp and estado_conv_from_ai == "2. Flujo de venta exitoso":
+            actions_payload_for_whatsapp = {"1": {"tipo": "mensaje", "mensaje": "¡PEDIDO CONFIRMADO Y EN PROCESO! 🛵 Tu pedido llegará en aprox 30-50 min. Recuerda pagarle el valor del domicilio al repartidor al recibir. ¡Síguenos para más promos en https://qhubomor.com/links! 🍔🥤"}}
+            print(f"{log_prefix} [PARSER FIX] Mensaje vacío detectado al confirmar pedido. Inyectando mensaje de confirmación por defecto.")
+
         ai_response_json_payload_for_history = {
             "estado_conversacion": estado_conv_from_ai,
             **actions_payload_for_whatsapp
@@ -1910,8 +1925,12 @@ async def send_whatsapp(server: str, userbot: str, token: str, phone: str, paylo
             current_presence_before_send = None
             try:
                 if tipo == "mensaje":
+                    text_content = item.get("mensaje", "")
+                    if not text_content or not text_content.strip():
+                        print(f"{log_prefix} Skipping empty text message to prevent empty bubble.")
+                        continue
                     msg_to_send_content = {"message": {
-                        "text": item.get("mensaje", "(Mensaje vacío)")}}
+                        "text": text_content.strip()}}
                 elif tipo == "imagen":
                     if not item.get("ruta2"):
                         print(f"{log_prefix} Skipping image send, no ruta2.")
@@ -2085,7 +2104,9 @@ async def extract_order_info_with_ai(userbot: str, phone: str, apikey: str, mode
       "detalle_completo": "Lista EXACTA y completa de todos los productos pedidos con sus respectivos precios, tal cual como el chatbot se lo detalló al cliente",
       "total_a_cobrar": "Valor numérico o en texto del total de los productos SIN sumar el valor del domicilio (ej. $35.000)",
       "direccion": "Dirección de entrega especificada (o 'No especificada')",
-      "metodo_pago": "Método de pago (ej. 'Efectivo', 'Transferencia', o 'No especificado')"
+      "metodo_pago": "Método de pago (ej. 'Efectivo', 'Transferencia', o 'No especificado')",
+      "telefono": "Número de teléfono de contacto si el cliente lo dio (ej. 3163287811). Si no lo dio, déjalo vacío.",
+      "nombre_cliente": "Nombre del cliente si lo dio, sino 'No especificado'"
     }
     Conversación:
     """ + history_text
@@ -2440,9 +2461,25 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     if is_modification:
                                         header_title = "⚠️ *PEDIDO MODIFICADO* ⚠️"
 
+                                    telefono_extraido = order_info.get("telefono", "").strip()
+                                    nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
+                                    
+                                    display_phone = current_task_req_info.lineaWA
+                                    if telefono_extraido:
+                                        import re
+                                        telefono_limpio = re.sub(r'\D', '', telefono_extraido)
+                                        if len(telefono_limpio) >= 10:
+                                            if len(telefono_limpio) == 10:
+                                                telefono_limpio = "57" + telefono_limpio
+                                            display_phone = telefono_limpio
+
+                                    cliente_str = display_phone
+                                    if nombre_extraido and nombre_extraido.lower() != "no especificado":
+                                        cliente_str = f"{nombre_extraido} ({display_phone})"
+
                                     notification_text = (
                                         f"{header_title}\n\n"
-                                        f"📱 *Cliente:* {current_task_req_info.lineaWA}\n\n"
+                                        f"📱 *Cliente:* {cliente_str}\n\n"
                                         f"📝 *Detalle del Pedido:*\n{order_info.get('detalle_completo', 'No especificado')}\n\n"
                                         f"💰 *Total a Cobrar:* {order_info.get('total_a_cobrar', 'No especificado')}\n"
                                         f"💳 *Método de Pago:* {order_info.get('metodo_pago', 'No especificado')}\n"
@@ -2457,7 +2494,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         current_task_req_info.token,
                                         current_task_req_info.lineaogruponotificacion,
                                         current_task_req_info.lineaogrupo or False,
-                                        current_task_req_info.lineaWA,
+                                        display_phone,
                                         notification_text,
                                         log_prefix
                                     )
