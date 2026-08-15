@@ -30,11 +30,13 @@ def enviar_notificacion_tool(
     total_a_cobrar: str, 
     direccion_envio: str, 
     metodo_pago: str, 
+    telefono_cliente: str,
+    nombre_cliente: str,
     config: RunnableConfig
 ) -> str:
     """Envía una notificación al vendedor y guarda el pedido en el dashboard de ventas.
     Úsala SOLO cuando se haya concretado un pedido final.
-    Debes extraer de la conversación el resumen general, la lista de productos, el total a cobrar, la dirección y el método de pago.
+    Debes extraer de la conversación el resumen general, la lista de productos, el total a cobrar, la dirección, el método de pago, el teléfono de contacto del cliente (si lo dio, ej. '3163287811', sino ''), y el nombre del cliente (si lo dio, sino 'No especificado').
     
     IMPORTANTE PARA DIRECCIÓN: La 'direccion_envio' DEBE ser SIEMPRE la dirección literal y explícita del cliente. Si el cliente dice "la misma dirección de siempre" o la dirección ya se mencionó en el historial, DEBES buscarla en el contexto y escribirla completa. NUNCA escribas "N/A" o "Ya registrada" si la dirección es conocida o se puede deducir del historial.
     Solo si algún dato realmente no existe o no aplica bajo ninguna circunstancia, pasa una cadena vacía.
@@ -100,6 +102,19 @@ def enviar_notificacion_tool(
     detalle_completo = format_money(detalle_completo)
     
     total_a_cobrar = format_money(total_a_cobrar)
+
+    display_phone = user_phone
+    if telefono_cliente and telefono_cliente.strip():
+        import re
+        telefono_limpio = re.sub(r'\D', '', telefono_cliente)
+        if len(telefono_limpio) >= 10:
+            if len(telefono_limpio) == 10:
+                telefono_limpio = "57" + telefono_limpio
+            display_phone = telefono_limpio
+
+    cliente_str = display_phone
+    if nombre_cliente and nombre_cliente.strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
+        cliente_str = f"{nombre_cliente.strip()} ({display_phone})"
 
     # --- Lógica de deduplicación unificada con main.py ---
     # Usar el teléfono como order_id base para evitar duplicados entre las dos rutas
@@ -190,7 +205,9 @@ def enviar_notificacion_tool(
                 "timestamp": order_timestamp,
                 "static_duration": 0,
                 "history": [{"status": "Recientes", "timestamp": order_timestamp}],
-                "origen": "tool_langgraph"
+                "origen": "tool_langgraph",
+                "extracted_phone": display_phone,
+                "extracted_name": nombre_cliente
             }
             print(f"[tools/enviar_notificacion/{user_phone}] Nuevo pedido guardado en dashboard (ID: {order_id}).")
 
@@ -209,7 +226,7 @@ def enviar_notificacion_tool(
     send_url = f"{server_url}/chats/send?id={userbot}"
     headers = {"Content-Type": "application/json", "x-access-token": token}
     
-    link_message_text = f"https://wa.me/{user_phone}"
+    link_message_text = f"https://wa.me/{display_phone}"
     
     header_title = "🛍️ *NUEVO PEDIDO* 🛍️"
     if is_modification:
@@ -217,7 +234,7 @@ def enviar_notificacion_tool(
 
     detail_message_text = (
         f"{header_title}\n\n"
-        f"👤 *Cliente:* {user_phone}\n\n"
+        f"👤 *Cliente:* {cliente_str}\n\n"
         f"📝 *Detalle del Pedido:*\n{detalle_completo}\n\n"
         f"💵 *Total a Cobrar:* {total_a_cobrar}\n"
         f"💳 *Método de Pago:* {metodo_pago}\n"
