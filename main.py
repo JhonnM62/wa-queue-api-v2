@@ -2374,8 +2374,8 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     if odata.get("phone") == current_task_req_info.lineaWA and odata.get("status") != "Despachados":
                                         order_ts = odata.get("timestamp", 0)
                                         if order_ts:
-                                            order_date = datetime.fromtimestamp(order_ts / 1000, tz=dt_timezone.utc).date()
-                                            if order_date == today:
+                                            # FIX: Usar diferencia de tiempo (12 horas) en lugar de fecha UTC para evitar bug a las 7:00 PM (hora Colombia)
+                                            if order_timestamp - order_ts < 12 * 3600 * 1000:
                                                 is_modification = True
                                                 existing_order_id = oid
                                                 break
