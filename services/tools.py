@@ -225,7 +225,10 @@ def enviar_notificacion_tool(
     send_url = f"{server_url}/chats/send?id={userbot}"
     headers = {"Content-Type": "application/json", "x-access-token": token}
     
-    link_message_text = f"https://wa.me/{display_phone}"
+    if len(display_phone) >= 14 and display_phone.isdigit():
+        link_message_text = "⚠️ Enlace wa.me deshabilitado (El usuario tiene un perfil anónimo. El bot debe pedir su número real)."
+    else:
+        link_message_text = f"https://wa.me/{display_phone}"
     
     header_title = "🛍️ *NUEVO PEDIDO* 🛍️"
     if is_modification:
