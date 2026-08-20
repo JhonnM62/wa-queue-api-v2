@@ -1783,6 +1783,11 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 msg = action.get("mensaje", "")
                 if not msg or not msg.strip():
                     keys_to_remove.append(k)
+                else:
+                    import re
+                    # Convertir markdown bold (**) a WhatsApp bold (*)
+                    msg = re.sub(r'\*\*(.*?)\*\*', r'*\1*', msg)
+                    action["mensaje"] = msg
         for k in keys_to_remove:
             del actions_payload_for_whatsapp[k]
 
