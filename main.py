@@ -3517,7 +3517,18 @@ async def dashboard():
                         
                         <div class="info-group">
                             <div class="info-label">Método de Pago</div>
-                            <div class="info-value">${order.metodo_pago || '-'}</div>
+                            <div class="info-value">
+                                ${(() => {
+                                    if (!order.metodo_pago) return '-';
+                                    let mp = order.metodo_pago;
+                                    if (mp.toLowerCase().includes('confirmado')) {
+                                        mp = mp.replace(/(confirmado)/i, '<span style="color:var(--success); font-weight:bold; background: rgba(16,185,129,0.1); padding: 2px 6px; border-radius: 4px; margin-left: 5px;">$1</span>');
+                                    } else if (mp.toLowerCase().includes('esperando') || mp.toLowerCase().includes('no confirmado')) {
+                                        mp = mp.replace(/(esperando.*pago|no confirmado)/i, '<span style="color:var(--warning); font-weight:bold; background: rgba(245,158,11,0.1); padding: 2px 6px; border-radius: 4px; margin-left: 5px;">$1</span>');
+                                    }
+                                    return mp;
+                                })()}
+                            </div>
                         </div>
 
                         <div class="info-group">
