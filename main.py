@@ -397,6 +397,72 @@ def extract_valid_push_name(push_name_raw: str) -> str:
     return ""
 
 
+def extract_control_actions_from_msg(msg: dict) -> list:
+    """
+    Busca recursivamente dentro del objeto msg cualquier estructura que parezca una reacción o comando de control.
+    Retorna una lista de tuplas: (texto, timestamp_ms, is_from_me, reacted_msg_id)
+    """
+    actions_found = []
+    
+    def get_msg_ts():
+        ts = msg.get('messageTimestamp', 0)
+        return ts * 1000 if ts else int(time.time() * 1000)
+
+    # 1. Buscar en msg['reactions'] (formato array moderno)
+    if isinstance(msg.get('reactions'), list):
+        for r in msg['reactions']:
+            if isinstance(r, dict):
+                text = r.get('text', '')
+                is_from_me = r.get('key', {}).get('fromMe', False)
+                ts_raw = r.get('senderTimestampMs', 0)
+                if not ts_raw:
+                    ts_raw = get_msg_ts()
+                ts = convert_timestamp_to_ms(ts_raw)
+                msg_id = msg.get('key', {}).get('id', '')
+                if text and msg_id:
+                    actions_found.append((text, ts, is_from_me, msg_id))
+                    
+    # 2. Búsqueda recursiva profunda para 'reactionMessage'
+    def find_reactions(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k == 'reactionMessage' and isinstance(v, dict):
+                    text = v.get('text', '')
+                    ts_raw = v.get('senderTimestampMs', 0)
+                    if not ts_raw:
+                        ts_raw = get_msg_ts()
+                    ts = convert_timestamp_to_ms(ts_raw)
+                    is_from_me = msg.get('key', {}).get('fromMe', False) 
+                    msg_id = v.get('key', {}).get('id', '')
+                    if text and msg_id:
+                        actions_found.append((text, ts, is_from_me, msg_id))
+                elif isinstance(v, (dict, list)):
+                    find_reactions(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                find_reactions(item)
+                
+    find_reactions(msg)
+    
+    # 3. Soporte adicional: si el operador envía '✋' o '✅' como texto NORMAL
+    msg_text = ""
+    if 'message' in msg and isinstance(msg['message'], dict):
+        if 'conversation' in msg['message']:
+            msg_text = msg['message'].get('conversation', '')
+        elif 'extendedTextMessage' in msg['message']:
+            msg_text = msg['message']['extendedTextMessage'].get('text', '')
+            
+    is_from_me = msg.get('key', {}).get('fromMe', False)
+    if is_from_me and msg_text.strip() in ['✋', '✅']:
+        ts_raw = get_msg_ts()
+        ts = convert_timestamp_to_ms(ts_raw)
+        msg_id = msg.get('key', {}).get('id', '')
+        if msg_id:
+            actions_found.append((msg_text.strip(), ts, is_from_me, msg_id))
+            
+    return actions_found
+
+
 async def get_latest_control_reaction_timestamps_and_push_name(userbot: str, token: str, phone: str, server: str) -> tuple[int, int, str]:
     """
     Obtiene los timestamps de las reacciones de control más recientes Y extrae el pushName del usuario.
@@ -443,33 +509,14 @@ async def get_latest_control_reaction_timestamps_and_push_name(userbot: str, tok
                                     print(
                                         f"{log_prefix} PushName extraído exitosamente: '{user_push_name}' (original: '{push_name_raw}')")
 
-                        # Procesar reacciones de control
-                        if 'message' in msg and 'reactionMessage' in msg['message']:
-                            reaction_data = msg['message']['reactionMessage']
-                            reaction_text = reaction_data.get('text', '')
-                            reaction_ts_ms_raw = reaction_data.get(
-                                'senderTimestampMs', 0)
-
-                            # Usar la nueva función para convertir el timestamp
-                            reaction_ts_ms = convert_timestamp_to_ms(
-                                reaction_ts_ms_raw)
-
-                            # Log para debugging
-                            print(
-                                f"{log_prefix} Procesando reacción: texto='{reaction_text}', timestamp_raw={reaction_ts_ms_raw}, timestamp_ms={reaction_ts_ms}")
-
-                            if reaction_ts_ms <= 0:
-                                continue
-
-                            is_reacting_msg_from_bot = msg.get(
-                                'key', {}).get('fromMe', False)
-                            reacted_msg_id = reaction_data.get('key', {}).get('id')
-
-                            if is_reacting_msg_from_bot and reacted_msg_id:
-                                # Guardar siempre la última reacción (por timestamp) para este mensaje original
-                                current_recorded = reaction_state.get(reacted_msg_id)
-                                if not current_recorded or reaction_ts_ms >= current_recorded[1]:
-                                    reaction_state[reacted_msg_id] = (reaction_text, reaction_ts_ms)
+                        # Extraer cualquier forma de reacción usando la función robusta
+                        acciones = extract_control_actions_from_msg(msg)
+                        for r_text, r_ts, r_from_me, r_msg_id in acciones:
+                            print(f"{log_prefix} Procesando acción detectada: texto='{r_text}', timestamp_ms={r_ts}, fromMe={r_from_me}")
+                            if r_ts > 0 and r_from_me and r_msg_id:
+                                current_recorded = reaction_state.get(r_msg_id)
+                                if not current_recorded or r_ts >= current_recorded[1]:
+                                    reaction_state[r_msg_id] = (r_text, r_ts)
                     except Exception as e_inner:
                         print(
                             f"{log_prefix} Error processing one reaction: {e_inner} Data: {msg.get('message', {}).get('reactionMessage')}")
@@ -511,31 +558,14 @@ async def get_latest_control_reaction_timestamps(userbot: str, token: str, phone
             if isinstance(response_data, dict) and 'data' in response_data and isinstance(response_data['data'], list):
                 for msg in response_data['data']:
                     try:
-                        if 'message' in msg and 'reactionMessage' in msg['message']:
-                            reaction_data = msg['message']['reactionMessage']
-                            reaction_text = reaction_data.get('text', '')
-                            reaction_ts_ms_raw = reaction_data.get(
-                                'senderTimestampMs', 0)
-
-                            # Usar la nueva función para convertir el timestamp
-                            reaction_ts_ms = convert_timestamp_to_ms(
-                                reaction_ts_ms_raw)
-
-                            # Log para debugging
-                            print(
-                                f"{log_prefix} Procesando reacción: texto='{reaction_text}', timestamp_raw={reaction_ts_ms_raw}, timestamp_ms={reaction_ts_ms}")
-
-                            if reaction_ts_ms <= 0:
-                                continue
-
-                            is_reacting_msg_from_bot = msg.get(
-                                'key', {}).get('fromMe', False)
-                            reacted_msg_id = reaction_data.get('key', {}).get('id')
-
-                            if is_reacting_msg_from_bot and reacted_msg_id:
-                                current_recorded = reaction_state.get(reacted_msg_id)
-                                if not current_recorded or reaction_ts_ms >= current_recorded[1]:
-                                    reaction_state[reacted_msg_id] = (reaction_text, reaction_ts_ms)
+                        # Extraer cualquier forma de reacción usando la función robusta
+                        acciones = extract_control_actions_from_msg(msg)
+                        for r_text, r_ts, r_from_me, r_msg_id in acciones:
+                            print(f"{log_prefix} Procesando acción detectada: texto='{r_text}', timestamp_ms={r_ts}, fromMe={r_from_me}")
+                            if r_ts > 0 and r_from_me and r_msg_id:
+                                current_recorded = reaction_state.get(r_msg_id)
+                                if not current_recorded or r_ts >= current_recorded[1]:
+                                    reaction_state[r_msg_id] = (r_text, r_ts)
                     except Exception as e_inner:
                         print(
                             f"{log_prefix} Error processing one reaction: {e_inner} Data: {msg.get('message', {}).get('reactionMessage')}")
