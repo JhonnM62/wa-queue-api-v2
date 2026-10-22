@@ -24,38 +24,42 @@ def buscar_catalogo_tool(query: str, config: RunnableConfig) -> str:
 
 
 def dispatch_order_to_pos_webhooks(endpoints_json: str, payload: dict):
-    """Despacha asíncronamente el pedido en segundo plano a todas las URLs de POS configuradas."""
+    """Despacha asíncronamente el pedido en segundo plano a todas las URLs de POS configuradas en paralelo."""
     if not endpoints_json:
         return
     import json
     import threading
     import httpx
 
-    def _send():
+    def _send_single(ep):
+        if not ep.get("activo", True) or not ep.get("url"):
+            return
+        url = str(ep["url"]).strip()
+        if not url.startswith(("http://", "https://")):
+            return
+        token = ep.get("token", "")
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["x-webhook-token"] = token
+        nombre = ep.get("nombre", url)
+        try:
+            with httpx.Client(timeout=15.0, verify=False) as client:
+                resp = client.post(url, json=payload, headers=headers)
+                print(f"[POS-WEBHOOK] Pedido {payload.get('orderIdWA')} enviado a {nombre} -> HTTP {resp.status_code}")
+        except Exception as err:
+            print(f"[POS-WEBHOOK] Error enviando pedido a {nombre}: {err}")
+
+    def _send_all():
         try:
             endpoints = json.loads(endpoints_json)
             if not isinstance(endpoints, list):
                 return
             for ep in endpoints:
-                if not ep.get("activo", True) or not ep.get("url"):
-                    continue
-                url = str(ep["url"]).strip()
-                if not url.startswith(("http://", "https://")):
-                    continue
-                token = ep.get("token", "")
-                headers = {"Content-Type": "application/json"}
-                if token:
-                    headers["x-webhook-token"] = token
-                try:
-                    with httpx.Client(timeout=6.0, verify=False) as client:
-                        resp = client.post(url, json=payload, headers=headers)
-                        print(f"[POS-WEBHOOK] Pedido {payload.get('orderIdWA')} enviado a {ep.get('nombre', url)} -> HTTP {resp.status_code}")
-                except Exception as err:
-                    print(f"[POS-WEBHOOK] Error enviando pedido a {ep.get('nombre', url)}: {err}")
+                threading.Thread(target=_send_single, args=(ep,), daemon=True).start()
         except Exception as e:
             print(f"[POS-WEBHOOK] Error procesando pos_endpoints: {e}")
 
-    threading.Thread(target=_send, daemon=True).start()
+    threading.Thread(target=_send_all, daemon=True).start()
 
 
 
