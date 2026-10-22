@@ -310,10 +310,12 @@ def enviar_notificacion_tool(
         }
     }
 
-    try:
-        # Petición síncrona ya que estamos dentro de una ejecución de herramienta síncrona
-        resp = httpx.post(send_url, headers=headers, json=combined_payload, timeout=30.0)
-        resp.raise_for_status()
-        return "Notificación enviada y pedido registrado en dashboard exitosamente."
-    except Exception as e:
-        return f"Error al enviar la notificación HTTP: {e}"
+    def _send_wa_notification_async():
+        try:
+            resp = httpx.post(send_url, headers=headers, json=combined_payload, timeout=20.0)
+            print(f"[tools/enviar_notificacion/{user_phone}] Notificación WhatsApp enviada al grupo -> HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"[tools/enviar_notificacion/{user_phone}] Error enviando notificación WhatsApp: {e}")
+
+    threading.Thread(target=_send_wa_notification_async, daemon=True).start()
+    return "Notificación encolada y pedido registrado en dashboard exitosamente."
