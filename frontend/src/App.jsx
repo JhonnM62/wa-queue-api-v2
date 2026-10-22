@@ -86,6 +86,7 @@ const DEFAULT_BOT = {
   activaruserbotopcional: false,
   userbotopcional: '',
   tools_config: '{"buscar_catalogo": true, "enviar_notificacion": true, "obtener_hora": true}',
+  pos_endpoints: '[]',
 };
 
 function parseTools(jsonStr) {
@@ -93,10 +94,21 @@ function parseTools(jsonStr) {
   catch { return { buscar_catalogo: true, enviar_notificacion: true, obtener_hora: true }; }
 }
 
+function parseEndpoints(jsonStr) {
+  try {
+    const arr = JSON.parse(jsonStr);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
 // ─── Bot Modal ─────────────────────────────────────────────────────────
 function BotModal({ bot, onClose, onSave, toast }) {
   const [form, setForm] = useState(bot ? { ...bot } : { ...DEFAULT_BOT });
   const [tools, setTools] = useState(parseTools(bot?.tools_config || DEFAULT_BOT.tools_config));
+  const [endpoints, setEndpoints] = useState(parseEndpoints(bot?.pos_endpoints || DEFAULT_BOT.pos_endpoints));
+  const [testingEndpointId, setTestingEndpointId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupDone, setLookupDone] = useState(!!bot);
@@ -112,6 +124,7 @@ function BotModal({ bot, onClose, onSave, toast }) {
       const found = await apiFetch(`/api/bots/lookup/${encodeURIComponent(id)}`);
       setForm({ ...found });
       setTools(parseTools(found.tools_config));
+      setEndpoints(parseEndpoints(found.pos_endpoints));
       setLookupDone(true);
       toast('Configuracion encontrada y cargada', 'success');
     } catch (e) {
@@ -122,10 +135,52 @@ function BotModal({ bot, onClose, onSave, toast }) {
     }
   };
 
+  const addEndpoint = () => {
+    const newEp = {
+      id: 'ep_' + Date.now(),
+      nombre: endpoints.length === 0 ? 'Restaurante' : (endpoints.length === 1 ? 'Granizados' : 'POS ' + (endpoints.length + 1)),
+      url: '',
+      token: '',
+      activo: true,
+    };
+    setEndpoints([...endpoints, newEp]);
+  };
+
+  const updateEndpoint = (id, key, val) => {
+    setEndpoints(prev => prev.map(ep => ep.id === id ? { ...ep, [key]: val } : ep));
+  };
+
+  const removeEndpoint = (id) => {
+    setEndpoints(prev => prev.filter(ep => ep.id !== id));
+  };
+
+  const testEndpoint = async (ep) => {
+    if (!ep.url || !ep.url.trim()) {
+      toast('Ingresa la URL del webhook primero', 'warn');
+      return;
+    }
+    setTestingEndpointId(ep.id);
+    try {
+      const res = await apiFetch('/api/bots/test-webhook', {
+        method: 'POST',
+        body: JSON.stringify({ url: ep.url.trim(), token: ep.token || '' }),
+      });
+      if (res.ok) {
+        toast(`Conexión exitosa con ${ep.nombre || 'POS'} (${res.detail})`, 'success');
+      } else {
+        toast(`Fallo al conectar: ${res.detail || 'Error'}`, 'error');
+      }
+    } catch (e) {
+      toast(`Error de prueba: ${e.message}`, 'error');
+    } finally {
+      setTestingEndpointId(null);
+    }
+  };
+
   const handleSave = async () => {
     if (!form.userbot_identifier.trim()) { toast('El ID del userbot es obligatorio', 'error'); return; }
     setSaving(true);
-    const payload = { ...form, tools_config: JSON.stringify(tools) };
+    const payload = { ...form, tools_config: JSON.stringify(tools), pos_endpoints: JSON.stringify(endpoints) };
     try {
       if (bot || form.id) {
         const id = form.id || bot.id;
@@ -327,6 +382,97 @@ function BotModal({ bot, onClose, onSave, toast }) {
               </div>
             </div>
           ))}
+        </Section>
+
+        {/* ── Sección: Sistemas POS ERP (Multi-Tenant Webhooks) ───────────────── */}
+        <Section title="Sistemas POS ERP (Multi-Tenant Webhooks)" icon={<Database size={16} style={{ color: '#3b82f6' }} />} defaultOpen={true}>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 12px 0' }}>
+            Despacha automáticamente los pedidos finalizados hacia múltiples aplicaciones POS (ej. Restaurante y Granizados).
+          </p>
+
+          {endpoints.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '16px', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', border: '1px dashed var(--panel-border)', marginBottom: '12px' }}>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>No hay endpoints de POS configurados.</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '12px' }}>
+              {endpoints.map((ep, idx) => (
+                <div key={ep.id || idx} style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid var(--panel-border)', borderRadius: '10px', padding: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="text"
+                        placeholder="Nombre (ej. Restaurante)"
+                        value={ep.nombre}
+                        onChange={e => updateEndpoint(ep.id, 'nombre', e.target.value)}
+                        style={{ fontWeight: 600, fontSize: '14px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '4px 8px', color: 'white', width: '180px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', color: ep.activo ? '#10b981' : '#94a3b8' }}>
+                        <input
+                          type="checkbox"
+                          checked={ep.activo}
+                          onChange={e => updateEndpoint(ep.id, 'activo', e.target.checked)}
+                          style={{ cursor: 'pointer', accentColor: '#10b981' }}
+                        />
+                        {ep.activo ? 'Activo' : 'Inactivo'}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => removeEndpoint(ep.id)}
+                        style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
+                        title="Eliminar este POS"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '3px' }}>URL WEBHOOK POS</label>
+                      <input
+                        type="url"
+                        placeholder="https://api-restaurante2.autosystemprojects.site/api/v1/domicilios/webhook"
+                        value={ep.url}
+                        onChange={e => updateEndpoint(ep.id, 'url', e.target.value)}
+                        style={{ fontSize: '13px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '3px' }}>TOKEN SECRETO (x-webhook-token)</label>
+                        <input
+                          type="password"
+                          placeholder="Token configurado en el POS"
+                          value={ep.token}
+                          onChange={e => updateEndpoint(ep.id, 'token', e.target.value)}
+                          style={{ fontSize: '13px' }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => testEndpoint(ep)}
+                        disabled={testingEndpointId === ep.id}
+                        style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid #3b82f6', color: '#60a5fa', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                      >
+                        {testingEndpointId === ep.id ? <><Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> Probando...</> : 'Probar Conexión'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={addEndpoint}
+            style={{ width: '100%', padding: '10px', background: 'rgba(59,130,246,0.1)', border: '1px dashed #3b82f6', color: '#60a5fa', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '13px', fontWeight: 600 }}
+          >
+            <Plus size={16} /> Agregar Otro Endpoint POS
+          </button>
         </Section>
 
         {/* ── Acciones ────────────────────────────────────── */}

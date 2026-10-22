@@ -23,6 +23,42 @@ def buscar_catalogo_tool(query: str, config: RunnableConfig) -> str:
     return search_knowledge(bot_id=bot_id, query=query, api_key=api_key)
 
 
+def dispatch_order_to_pos_webhooks(endpoints_json: str, payload: dict):
+    """Despacha asíncronamente el pedido en segundo plano a todas las URLs de POS configuradas."""
+    if not endpoints_json:
+        return
+    import json
+    import threading
+    import httpx
+
+    def _send():
+        try:
+            endpoints = json.loads(endpoints_json)
+            if not isinstance(endpoints, list):
+                return
+            for ep in endpoints:
+                if not ep.get("activo", True) or not ep.get("url"):
+                    continue
+                url = str(ep["url"]).strip()
+                if not url.startswith(("http://", "https://")):
+                    continue
+                token = ep.get("token", "")
+                headers = {"Content-Type": "application/json"}
+                if token:
+                    headers["x-webhook-token"] = token
+                try:
+                    with httpx.Client(timeout=6.0, verify=False) as client:
+                        resp = client.post(url, json=payload, headers=headers)
+                        print(f"[POS-WEBHOOK] Pedido {payload.get('orderIdWA')} enviado a {ep.get('nombre', url)} -> HTTP {resp.status_code}")
+                except Exception as err:
+                    print(f"[POS-WEBHOOK] Error enviando pedido a {ep.get('nombre', url)}: {err}")
+        except Exception as e:
+            print(f"[POS-WEBHOOK] Error procesando pos_endpoints: {e}")
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
+
 @tool
 def enviar_notificacion_tool(
     resumen_general: str, 
@@ -212,6 +248,23 @@ def enviar_notificacion_tool(
 
         with open(ORDERS_FILE_PATH, 'w', encoding='utf-8') as f:
             json.dump(orders_data, f, ensure_ascii=False, indent=4)
+
+        # 1.1 Despachar webhook a los sistemas POS ERP configurados
+        pos_endpoints_cfg = config_dict.get("pos_endpoints", "[]")
+        order_webhook_payload = {
+            "orderIdWA": order_id,
+            "clienteTelefono": display_phone,
+            "clienteNombre": nombre_cliente if nombre_cliente and str(nombre_cliente).strip().lower() not in ["no especificado", "no aplica", "n/a", "na", ""] else "",
+            "direccion": direccion_envio,
+            "detalleTextoWA": detalle_completo or lista_productos,
+            "resumen": resumen_general,
+            "totalWA": total_a_cobrar,
+            "metodoPagoWA": metodo_pago,
+            "timestamp": order_timestamp,
+            "isModification": is_modification,
+            "userbot": userbot
+        }
+        dispatch_order_to_pos_webhooks(pos_endpoints_cfg, order_webhook_payload)
 
     except Exception as e:
         print(f"[tools/enviar_notificacion/{user_phone}] Error al guardar en dashboard: {e}")

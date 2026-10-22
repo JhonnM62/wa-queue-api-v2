@@ -269,3 +269,35 @@ def delete_bot_knowledge_single(
         return {"message": "Conocimiento eliminado exitosamente"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/test-webhook")
+async def test_webhook_connection(
+    req: schemas.TestWebhookRequest,
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    """
+    Prueba la conexión enviando un ping HTTP POST al webhook del POS configurado.
+    """
+    import httpx
+    if not req.url or not req.url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL inválida. Debe comenzar con http:// o https://")
+    
+    headers = {"Content-Type": "application/json"}
+    if req.token:
+        headers["x-webhook-token"] = req.token
+    
+    try:
+        async with httpx.AsyncClient(timeout=6.0, verify=False) as client:
+            resp = await client.post(req.url, json={"ping": True, "source": "wa-queue-test"}, headers=headers)
+            return {
+                "ok": resp.is_success,
+                "status": resp.status_code,
+                "detail": f"Respuesta del POS: HTTP {resp.status_code}"
+            }
+    except httpx.ConnectError:
+        return {"ok": False, "status": 0, "detail": "No se pudo conectar con el servidor POS (Revisa la URL)"}
+    except httpx.TimeoutException:
+        return {"ok": False, "status": 408, "detail": "Tiempo de espera agotado al conectar con el POS"}
+    except Exception as e:
+        return {"ok": False, "status": 500, "detail": f"Error: {str(e)}"}
+

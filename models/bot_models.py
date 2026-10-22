@@ -61,6 +61,10 @@ class BotConfig(Base):
     # JSON string: {"buscar_catalogo": true, "enviar_notificacion": true, "obtener_hora": true}
     tools_config = Column(Text, default='{"buscar_catalogo": true, "enviar_notificacion": true, "obtener_hora": true}')
 
+    # === SISTEMAS POS ERP (MULTI-TENANT WEBHOOKS) ===
+    # JSON string: [{"id": "ep_1", "nombre": "Restaurante", "url": "https://...", "token": "...", "activo": true}]
+    pos_endpoints = Column(Text, default='[]')
+
     owner = relationship("User", back_populates="bots")
 
 class ConversationMessage(Base):

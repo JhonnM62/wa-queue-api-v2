@@ -52,6 +52,9 @@ class BotConfigBase(BaseModel):
     # Tools (JSON string)
     tools_config: Optional[str] = '{"buscar_catalogo": true, "enviar_notificacion": true, "obtener_hora": true}'
 
+    # Sistemas POS ERP Webhooks (JSON string)
+    pos_endpoints: Optional[str] = '[]'
+
 class BotConfigCreate(BotConfigBase):
     pass
 
@@ -75,6 +78,11 @@ class BotConfigUpdate(BaseModel):
     activaruserbotopcional: Optional[bool] = None
     userbotopcional: Optional[str] = None
     tools_config: Optional[str] = None
+    pos_endpoints: Optional[str] = None
+
+class TestWebhookRequest(BaseModel):
+    url: str
+    token: Optional[str] = ""
 
 class BotConfigResponse(BotConfigBase):
     id: int

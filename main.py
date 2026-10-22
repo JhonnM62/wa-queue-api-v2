@@ -1401,7 +1401,8 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 "token": getattr(req, 'token', ''),
                 "receiver": getattr(req, 'lineaogruponotificacion', ''),
                 "is_group": getattr(req, 'lineaogrupo', False),
-                "user_phone": req.lineaWA
+                "user_phone": req.lineaWA,
+                "pos_endpoints": bot_config.pos_endpoints or '[]'
             }
         db.close()
     except Exception as e:
@@ -2490,6 +2491,26 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                                   ensure_ascii=False, indent=4)
                                     print(
                                         f"{log_prefix} Pedido guardado en orders.json exitosamente.")
+
+                                    # Despacho asíncrono a endpoints POS ERP configurados
+                                    try:
+                                        from services.tools import dispatch_order_to_pos_webhooks
+                                        pos_endpoints_str = config_dict.get("pos_endpoints", "[]") if 'config_dict' in locals() and config_dict else "[]"
+                                        dispatch_order_to_pos_webhooks(pos_endpoints_str, {
+                                            "orderIdWA": order_id,
+                                            "clienteTelefono": display_phone,
+                                            "clienteNombre": nombre_extraido if nombre_extraido and nombre_extraido.lower() not in ["no especificado", "no aplica", "n/a", "na", ""] else "",
+                                            "direccion": order_info.get("direccion", ""),
+                                            "detalleTextoWA": order_info.get("detalle_completo") or order_info.get("pedido", ""),
+                                            "resumen": order_info.get("resumen", ""),
+                                            "totalWA": order_info.get("total_a_cobrar", ""),
+                                            "metodoPagoWA": order_info.get("metodo_pago", ""),
+                                            "timestamp": order_timestamp,
+                                            "isModification": is_modification,
+                                            "userbot": userbot_notificacion or getattr(current_task_req_info, 'userbot', '')
+                                        })
+                                    except Exception as _pos_err:
+                                        print(f"{log_prefix} Error despachando POS webhook en fallback: {_pos_err}")
 
                                     # Cabecera dinámica según si es nuevo o modificado
                                     header_title = "🚨 *NUEVO PEDIDO* 🚨"
