@@ -3608,26 +3608,55 @@ async def dashboard():
     return HTMLResponse(content=html_content)
 
 
+FRONTEND_DIST_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "frontend", "dist"
+)
+FRONTEND_ASSETS_DIR = os.path.join(FRONTEND_DIST_DIR, "assets")
+
+if os.path.exists(FRONTEND_ASSETS_DIR):
+    app.mount(
+        "/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
+
+
 @app.get("/panel")
 async def serve_panel():
-    return FileResponse("frontend/dist/index.html")
+    index_path = os.path.join(FRONTEND_DIST_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Panel build no encontrado")
 
 
-# Opcional: Montar assets
-if os.path.exists("frontend/dist/assets"):
-    app.mount(
-        "/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
+@app.get("/favicon.svg")
+async def favicon_svg():
+    svg_path = os.path.join(FRONTEND_DIST_DIR, "favicon.svg")
+    if os.path.exists(svg_path):
+        return FileResponse(svg_path, media_type="image/svg+xml")
+    return FileResponse("frontend/dist/favicon.svg")
 
 
 @app.get("/favicon.ico")
 async def favicon():
+    svg_path = os.path.join(FRONTEND_DIST_DIR, "favicon.svg")
+    if os.path.exists(svg_path):
+        return FileResponse(svg_path, media_type="image/svg+xml")
     return FileResponse("frontend/dist/favicon.svg")
+
+
+@app.get("/icons.svg")
+async def icons_svg():
+    icons_path = os.path.join(FRONTEND_DIST_DIR, "icons.svg")
+    if os.path.exists(icons_path):
+        return FileResponse(icons_path, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Icons no encontrado")
 
 
 @app.get("/{full_path:path}")
 async def serve_spa(request: Request, full_path: str):
     if full_path.startswith("api/") or full_path.startswith("assets/") or full_path == "dashboard":
         raise HTTPException(status_code=404, detail="Not found")
+    index_path = os.path.join(FRONTEND_DIST_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
     return FileResponse("frontend/dist/index.html")
 
 if __name__ == "__main__":
