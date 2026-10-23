@@ -19,6 +19,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 from services.tools import buscar_catalogo_tool, enviar_notificacion_tool
+from core.phone_utils import is_meta_identifier, get_meta_directive_prompt
 try:
     from google.genai import types as genai_types
 except ImportError:
@@ -171,12 +172,22 @@ def call_model(state: AgentState):
         except Exception as rag_err:
             print(f"{log_prefix} [RAG-COMPLETO] ⚠️ No se pudo cargar el catálogo: {rag_err}")
 
+    # Detectar si el remitente es un identificador de Meta / ManyChat / Username
+    current_phone = bot_config.get("user_phone") or state.get("phone", "")
+    meta_prompt_block = ""
+    if is_meta_identifier(current_phone):
+        meta_prompt_block = get_meta_directive_prompt(current_phone)
+        print(f"{log_prefix} ⚠️ [META-ID DETECTADO] '{current_phone}' es un identificador de Meta/ManyChat/Username. Inyectando directiva para exigir número celular real.")
+
     # Lógica para inyectar System Prompt como primer mensaje si no existe al inicio
     if not messages or not isinstance(messages[0], SystemMessage):
-        final_system_prompt = system_prompt + "\n\n" + reglas_herramientas_extra + INSTRUCCIONES_JSON + rag_context_block
+        final_system_prompt = system_prompt + "\n\n" + reglas_herramientas_extra + INSTRUCCIONES_JSON + rag_context_block + meta_prompt_block
         messages = [
             SystemMessage(content=final_system_prompt)
         ] + messages
+    elif meta_prompt_block and meta_prompt_block not in str(messages[0].content):
+        # Si ya existe un SystemMessage previo, asegurar que la directiva de Meta quede inyectada
+        messages[0] = SystemMessage(content=messages[0].content + meta_prompt_block)
 
     # Obtener modelos de fallback si vienen de config_dict, o construir lista local
     fallback_models = bot_config.get("fallback_models", [])

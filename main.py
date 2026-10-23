@@ -28,6 +28,7 @@ from prompt_config import (
     EXAMPLE_JSON_STRUCTURE,
     get_prompt_template
 )
+from core.phone_utils import is_meta_identifier, clean_real_phone, get_meta_directive_prompt
 
 # Cargar variables de entorno del archivo .env
 load_dotenv()
@@ -1463,6 +1464,10 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
     current_prompt_text_for_system_instruction = dynamic_prompt_template.format(
         **prompt_data)
 
+    if is_meta_identifier(phone):
+        current_prompt_text_for_system_instruction += get_meta_directive_prompt(phone)
+        print(f"{log_prefix} ⚠️ [META-ID DETECTADO] Remitente '{phone}' es un ID de Meta/ManyChat/Username. Inyectando directiva en system instruction.")
+
     # LOG para mostrar el prompt final y el contenido que se enviará a la IA
     # print(f"{log_prefix} ===== PROMPT Y CONTENIDO ENVIADO A LA IA =====")
     # print(f"{log_prefix} USER_CONTENT (final_content_for_ai):")
@@ -2101,7 +2106,10 @@ async def send_notification(server: str, userbot: str, token: str, receiver: str
     headers = {"Content-Type": "application/json", "x-access-token": token}
 
     # Construir el mensaje de notificación (solo el enlace)
-    link_message_text = f"https://wa.me/{linea_wa}"
+    if is_meta_identifier(linea_wa):
+        link_message_text = f"⚠️ Contacto Meta / Anónimo: {linea_wa}\n🚨 ATENCIÓN: El cliente tiene el número oculto o es usuario de Meta. El domiciliario no puede llamarlo por enlace wa.me."
+    else:
+        link_message_text = f"https://wa.me/{linea_wa}"
 
     # Construir el mensaje con el detalle de la IA
     detail_message_text = "(No se pudo extraer el detalle del pedido de la IA)"
@@ -2189,7 +2197,7 @@ async def extract_order_info_with_ai(userbot: str, phone: str, apikey: str, mode
       "total_a_cobrar": "Valor numérico o en texto del total de los productos SIN sumar el valor del domicilio (ej. $35.000)",
       "direccion": "Dirección de entrega especificada (o 'No especificada')",
       "metodo_pago": "Método de pago (ej. 'Efectivo', 'Transferencia', o 'No especificado')",
-      "telefono": "Número de teléfono de contacto si el cliente lo dio (ej. 3163287811). Si no lo dio, déjalo vacío.",
+      "telefono": "Número de teléfono celular real de 10 dígitos si el cliente lo dio en los mensajes (ej. 3163287811). Si no lo dio o solo hay un identificador de Meta/ManyChat, déjalo vacío.",
       "nombre_cliente": "Nombre del cliente si lo dio, sino 'No especificado'"
     }
     Conversación:
@@ -2489,12 +2497,33 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 detalle_completo_fmt = format_detalle_wa(order_info.get("detalle_completo", ""))
                                 order_info["detalle_completo"] = detalle_completo_fmt
 
+                                telefono_extraido = order_info.get("telefono", "").strip()
+                                nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
+
+                                is_meta = is_meta_identifier(current_task_req_info.lineaWA)
+                                real_phone = clean_real_phone(telefono_extraido) if telefono_extraido else ""
+                                display_phone = real_phone if real_phone else current_task_req_info.lineaWA
+
+                                cliente_str = display_phone
+                                if is_meta and real_phone:
+                                    cliente_str = f"{nombre_extraido} ({real_phone}) [Meta ID: {current_task_req_info.lineaWA}]" if nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"] else f"{real_phone} [Meta ID: {current_task_req_info.lineaWA}]"
+                                elif is_meta and not real_phone:
+                                    cliente_str = f"⚠️ [Sin número real] Meta ID: {current_task_req_info.lineaWA}" if not nombre_extraido or nombre_extraido.lower() in ["", "no especificado", "no aplica", "n/a", "na"] else f"{nombre_extraido} ⚠️ [Sin número real] (Meta ID: {current_task_req_info.lineaWA})"
+                                elif nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
+                                    cliente_str = f"{nombre_extraido} ({display_phone})"
+
                                 is_modification = False
                                 existing_order_id = None
                                 today = datetime.now(dt_timezone.utc).date()
                                 
                                 for oid, odata in orders_data.items():
-                                    if odata.get("phone") == current_task_req_info.lineaWA and odata.get("status") != "Despachados":
+                                    matches_user = (
+                                        odata.get("phone") == current_task_req_info.lineaWA
+                                        or odata.get("phone") == display_phone
+                                        or odata.get("meta_identifier") == current_task_req_info.lineaWA
+                                        or (real_phone and odata.get("extracted_phone") == real_phone)
+                                    )
+                                    if matches_user and odata.get("status") != "Despachados":
                                         order_ts = odata.get("timestamp", 0)
                                         if order_ts:
                                             # FIX: Usar diferencia de tiempo (12 horas) en lugar de fecha UTC para evitar bug a las 7:00 PM (hora Colombia)
@@ -2503,7 +2532,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                                 existing_order_id = oid
                                                 break
                                 
-                                order_id = existing_order_id if existing_order_id else f"ORDER_{int(time.time())}_{current_task_req_info.lineaWA[-4:]}"
+                                order_id = existing_order_id if existing_order_id else f"ORDER_{int(time.time())}_{display_phone[-4:]}"
 
                                 # --- NUEVO: Control estricto de duplicados por contenido del pedido ---
                                 is_exact_duplicate = False
@@ -2553,13 +2582,21 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "direccion", "")
                                         orders_data[order_id]["metodo_pago"] = order_info.get(
                                             "metodo_pago", "")
+                                        if real_phone:
+                                            orders_data[order_id]["phone"] = real_phone
+                                            orders_data[order_id]["extracted_phone"] = real_phone
+                                        if is_meta:
+                                            orders_data[order_id]["meta_identifier"] = current_task_req_info.lineaWA
+                                        if nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
+                                            orders_data[order_id]["extracted_name"] = nombre_extraido
                                         print(
                                             f"{log_prefix} 🔄 [NOTIF-FALLBACK] Actualizando pedido existente en dashboard (ID: {order_id}).", flush=True)
                                     else:
                                         # Es un pedido completamente nuevo
                                         orders_data[order_id] = {
                                             "id": order_id,
-                                            "phone": current_task_req_info.lineaWA,
+                                            "phone": real_phone if real_phone else current_task_req_info.lineaWA,
+                                            "meta_identifier": current_task_req_info.lineaWA if is_meta else None,
                                             "summary": order_info.get("resumen", ""),
                                             "pedido": order_info.get("pedido", ""),
                                             "detalle_completo": order_info.get("detalle_completo", ""),
@@ -2570,7 +2607,9 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "timestamp": order_timestamp,
                                             "static_duration": 0,
                                             "history": [{"status": "Recientes", "timestamp": order_timestamp}],
-                                            "origen": "fallback_sdk"
+                                            "origen": "fallback_sdk",
+                                            "extracted_phone": real_phone or (telefono_extraido if telefono_extraido else None),
+                                            "extracted_name": nombre_extraido
                                         }
 
                                     with open(ORDERS_FILE_PATH, 'w', encoding='utf-8') as f:
@@ -2578,22 +2617,6 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                                   ensure_ascii=False, indent=4)
                                     print(
                                         f"{log_prefix} 📝 [NOTIF-FALLBACK] Pedido guardado en orders.json exitosamente (ID: {order_id}).", flush=True)
-
-                                    telefono_extraido = order_info.get("telefono", "").strip()
-                                    nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
-                                    
-                                    display_phone = current_task_req_info.lineaWA
-                                    if telefono_extraido:
-                                        import re
-                                        telefono_limpio = re.sub(r'\D', '', telefono_extraido)
-                                        if len(telefono_limpio) >= 10:
-                                            if len(telefono_limpio) == 10:
-                                                telefono_limpio = "57" + telefono_limpio
-                                            display_phone = telefono_limpio
-
-                                    cliente_str = display_phone
-                                    if nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
-                                        cliente_str = f"{nombre_extraido} ({display_phone})"
 
                                     # Despacho asíncrono a endpoints POS ERP configurados
                                     try:
@@ -3115,6 +3138,36 @@ async def update_order_status(order_id: str, update: OrderStatusUpdate):
         status_code=404, detail="Base de datos de pedidos no encontrada")
 
 
+@app.delete("/api/orders/{order_id}")
+async def delete_order(order_id: str):
+    if os.path.exists(ORDERS_FILE_PATH):
+        try:
+            with open(ORDERS_FILE_PATH, 'r', encoding='utf-8') as f:
+                orders = json.load(f)
+            
+            target_key = None
+            if order_id in orders:
+                target_key = order_id
+            else:
+                for k, v in orders.items():
+                    if v.get("id") == order_id or v.get("phone") == order_id or str(k) == str(order_id):
+                        target_key = k
+                        break
+            
+            if target_key:
+                del orders[target_key]
+                with open(ORDERS_FILE_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(orders, f, ensure_ascii=False, indent=4)
+                return {"status": "success", "message": "Pedido eliminado"}
+            else:
+                raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=404, detail="Base de datos de pedidos no encontrada")
+
+
 @app.get("/dashboard")
 async def dashboard():
     html_content = """
@@ -3161,11 +3214,47 @@ async def dashboard():
                 box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
                 z-index: 10;
             }
-            h1 { margin: 0; font-size: 1.4rem; font-weight: 600; }
+            h1 { margin: 0; font-size: 1.4rem; font-weight: 600; white-space: nowrap; }
             .header-controls {
                 display: flex;
                 align-items: center;
-                gap: 1.5rem;
+                gap: 1rem;
+                flex-wrap: wrap;
+            }
+            .search-input {
+                background: var(--bg-color);
+                color: var(--text-main);
+                border: 1px solid var(--border);
+                padding: 0.5rem 0.85rem;
+                border-radius: 6px;
+                font-family: 'Inter', sans-serif;
+                font-size: 0.85rem;
+                min-width: 250px;
+                outline: none;
+                transition: all 0.2s ease;
+            }
+            .search-input:focus {
+                border-color: var(--primary);
+                box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+            }
+            .filter-select {
+                background: var(--bg-color);
+                color: var(--text-main);
+                border: 1px solid var(--border);
+                padding: 0.5rem 0.85rem;
+                border-radius: 6px;
+                font-family: 'Inter', sans-serif;
+                font-size: 0.85rem;
+                outline: none;
+                cursor: pointer;
+                transition: all 0.2s ease;
+            }
+            .filter-select:focus {
+                border-color: var(--primary);
+            }
+            .filter-select option {
+                background: var(--card-bg);
+                color: var(--text-main);
             }
             .date-picker {
                 background: var(--bg-color);
@@ -3180,6 +3269,50 @@ async def dashboard():
             .date-picker::-webkit-calendar-picker-indicator {
                 filter: invert(1);
                 cursor: pointer;
+            }
+            .btn-delete {
+                background: rgba(239, 68, 68, 0.12);
+                border: 1px solid rgba(239, 68, 68, 0.3);
+                color: #f87171;
+                border-radius: 6px;
+                padding: 0.35rem 0.55rem;
+                cursor: pointer;
+                font-size: 0.9rem;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s ease;
+                line-height: 1;
+            }
+            .btn-delete:hover {
+                background: #ef4444;
+                color: white;
+                transform: scale(1.08);
+                box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+            }
+            .badge-meta {
+                background: rgba(168, 85, 247, 0.2);
+                color: #c084fc;
+                border: 1px solid rgba(168, 85, 247, 0.4);
+                padding: 0.15rem 0.45rem;
+                border-radius: 4px;
+                font-size: 0.7rem;
+                font-weight: 700;
+                margin-left: 0.3rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+            .phone-meta-warning {
+                background: rgba(245, 158, 11, 0.15);
+                color: #fbbf24;
+                border: 1px solid rgba(245, 158, 11, 0.3);
+                padding: 0.35rem 0.7rem;
+                border-radius: 20px;
+                font-size: 0.8rem;
+                font-weight: 600;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.3rem;
             }
             .tabs {
                 display: flex;
@@ -3394,13 +3527,28 @@ async def dashboard():
             @media (max-width: 768px) {
                 header {
                     flex-direction: column;
-                    align-items: flex-start;
-                    gap: 1rem;
-                    padding: 1rem;
+                    align-items: stretch;
+                    gap: 0.8rem;
+                    padding: 0.8rem 1rem;
                 }
                 .header-controls {
                     width: 100%;
-                    justify-content: space-between;
+                    display: grid;
+                    grid-template-columns: 1fr;
+                    gap: 0.5rem;
+                }
+                .search-input {
+                    min-width: unset;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .filter-select {
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .date-picker {
+                    width: 100%;
+                    box-sizing: border-box;
                 }
                 .tabs {
                     padding: 0.8rem 1rem;
@@ -3430,8 +3578,19 @@ async def dashboard():
     </head>
     <body>
         <header>
-            <h1>Dashboard de Pedidos</h1>
+            <div style="display: flex; align-items: center; gap: 0.8rem;">
+                <h1>Dashboard de Pedidos</h1>
+            </div>
             <div class="header-controls">
+                <input type="text" id="order-search" class="search-input" placeholder="🔍 Buscar teléfono, cliente, producto, dir...">
+                <select id="filter-payment" class="filter-select">
+                    <option value="ALL">💳 Todos los métodos</option>
+                    <option value="CONFIRMADO">⭐ Nequi / Transferencia (Confirmados)</option>
+                    <option value="NEQUI">🟣 Nequi (Todos)</option>
+                    <option value="TRANSFERENCIA">🏦 Transferencia (Todos)</option>
+                    <option value="EFECTIVO">💵 Efectivo</option>
+                    <option value="PENDIENTE">⏳ Esperando Pago / Pendiente</option>
+                </select>
                 <input type="date" id="filter-date" class="date-picker">
                 <div id="last-updated" class="time">Actualizando...</div>
             </div>
@@ -3476,6 +3635,17 @@ async def dashboard():
                 });
             });
             
+            const orderSearchInput = document.getElementById('order-search');
+            const filterPaymentSelect = document.getElementById('filter-payment');
+
+            orderSearchInput.addEventListener('input', () => {
+                renderOrders();
+            });
+
+            filterPaymentSelect.addEventListener('change', () => {
+                renderOrders();
+            });
+
             dateFilter.addEventListener('change', () => {
                 renderOrders();
             });
@@ -3574,18 +3744,98 @@ async def dashboard():
                 }
             }
 
+            async function deleteOrder(orderId) {
+                if (!confirm('¿Estás seguro de que deseas eliminar este pedido permanentemente? (Ideal para pedidos duplicados)')) {
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/orders/' + encodeURIComponent(orderId), {
+                        method: 'DELETE'
+                    });
+                    if (res.ok) {
+                        delete allOrders[orderId];
+                        for (let k in allOrders) {
+                            if (allOrders[k].id === orderId || allOrders[k].phone === orderId) {
+                                delete allOrders[k];
+                            }
+                        }
+                        renderOrders();
+                        fetchOrders();
+                    } else {
+                        const err = await res.json();
+                        alert('Error eliminando pedido: ' + (err.detail || 'No se pudo eliminar'));
+                    }
+                } catch (e) {
+                    console.error('Error al eliminar:', e);
+                    alert('Error de conexión al eliminar el pedido.');
+                }
+            }
+
+            function isMetaPhone(p) {
+                if (!p) return false;
+                const raw = String(p).trim();
+                if (raw.includes('@') || /[a-zA-Z_]/.test(raw)) return true;
+                const digits = raw.replace(/[^0-9]/g, '');
+                if (digits.length >= 14 || digits.length < 10) return true;
+                if (digits.length === 10 && !digits.startsWith('3') && !digits.startsWith('60')) return true;
+                if (digits.length === 12 && !digits.startsWith('573') && !digits.startsWith('5760') && !digits.startsWith('593')) return true;
+                return false;
+            }
+
             function renderOrders() {
                 container.innerHTML = '';
                 const selectedDateStr = dateFilter.value; // YYYY-MM-DD
+                const searchQuery = (orderSearchInput ? orderSearchInput.value : '').trim().toLowerCase();
+                const paymentFilter = filterPaymentSelect ? filterPaymentSelect.value : 'ALL';
                 
-                // Filter by Date
+                // 1. Filtrar por Fecha
                 let dayOrders = Object.values(allOrders).filter(o => {
                     const d = new Date(o.timestamp);
                     const orderDateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
                     return orderDateStr === selectedDateStr;
                 });
+
+                // 2. Filtrar por Búsqueda de Texto
+                if (searchQuery) {
+                    dayOrders = dayOrders.filter(o => {
+                        const combined = [
+                            o.phone,
+                            o.extracted_phone,
+                            o.extracted_name,
+                            o.meta_identifier,
+                            o.pedido,
+                            o.detalle_completo,
+                            o.direccion,
+                            o.metodo_pago,
+                            o.summary,
+                            o.total_a_cobrar
+                        ].filter(Boolean).join(' ').toLowerCase();
+                        return combined.includes(searchQuery);
+                    });
+                }
+
+                // 3. Filtrar por Método de Pago
+                if (paymentFilter !== 'ALL') {
+                    dayOrders = dayOrders.filter(o => {
+                        const mp = (o.metodo_pago || '').toLowerCase();
+                        if (paymentFilter === 'CONFIRMADO') {
+                            const isConfirmed = mp.includes('confirmado') || mp.includes('confirmada');
+                            const isNequiOrTransf = mp.includes('nequi') || mp.includes('transferencia') || mp.includes('banc') || mp.includes('daviplata');
+                            return isConfirmed && isNequiOrTransf;
+                        } else if (paymentFilter === 'NEQUI') {
+                            return mp.includes('nequi');
+                        } else if (paymentFilter === 'TRANSFERENCIA') {
+                            return mp.includes('transferencia') || mp.includes('banc');
+                        } else if (paymentFilter === 'EFECTIVO') {
+                            return mp.includes('efectivo');
+                        } else if (paymentFilter === 'PENDIENTE') {
+                            return mp.includes('esperando') || mp.includes('pendiente') || mp.includes('no confirmado');
+                        }
+                        return true;
+                    });
+                }
                 
-                // Calculate Badges
+                // 4. Calcular Badges según filtros aplicados
                 const counts = { 'Recientes': 0, 'En proceso': 0, 'Despachados': 0 };
                 dayOrders.forEach(o => {
                     if (counts[o.status] !== undefined) counts[o.status]++;
@@ -3595,16 +3845,19 @@ async def dashboard():
                 document.getElementById('badge-proceso').innerText = counts['En proceso'];
                 document.getElementById('badge-despachados').innerText = counts['Despachados'];
 
-                // Filter by Status Tab
+                // 5. Filtrar por Tab actual
                 const tabOrders = dayOrders.filter(o => o.status === currentTab);
                 
                 // Sort by timestamp desc
                 tabOrders.sort((a, b) => b.timestamp - a.timestamp);
 
                 if (tabOrders.length === 0) {
+                    let msgExtra = (searchQuery || paymentFilter !== 'ALL') 
+                        ? 'Intenta cambiar los términos de búsqueda o los filtros aplicados.' 
+                        : 'No se encontraron pedidos en esta sección para la fecha seleccionada.';
                     container.innerHTML = `<div class="empty-state">
                         <h2 style="margin-bottom:0.5rem">No hay pedidos</h2>
-                        <p>No se encontraron pedidos en esta sección para la fecha seleccionada.</p>
+                        <p>${msgExtra}</p>
                     </div>`;
                     return;
                 }
@@ -3615,6 +3868,7 @@ async def dashboard():
                     
                     const card = document.createElement('div');
                     card.className = 'card';
+                    card.id = `card-${order.id || order.phone}`;
                     
                     // Highlight if it's very recent (last 30 seconds)
                     const isVeryRecent = (new Date().getTime() - order.timestamp) < 30000;
@@ -3639,6 +3893,34 @@ async def dashboard():
                             <span class="total-amount">${order.total_a_cobrar}</span>
                         </div>
                     ` : '';
+
+                    // Header del teléfono / Meta ID
+                    let phoneDisplayHtml = '';
+                    const realPhone = order.extracted_phone && !isMetaPhone(order.extracted_phone) ? order.extracted_phone : (!isMetaPhone(order.phone) ? order.phone : '');
+                    const metaId = order.meta_identifier || (isMetaPhone(order.phone) ? order.phone : null);
+
+                    if (realPhone) {
+                        phoneDisplayHtml = `
+                            <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+                                <a href="https://wa.me/${realPhone}" target="_blank" class="phone-link">
+                                    💬 ${realPhone}
+                                </a>
+                                ${metaId ? `<span class="badge-meta" title="ID original Meta: ${metaId}">Meta ID</span>` : ''}
+                            </div>
+                        `;
+                    } else if (metaId) {
+                        phoneDisplayHtml = `
+                            <span class="phone-meta-warning" title="ID de Meta/ManyChat. El cliente aún no ha dado su número real.">
+                                ⚠️ ID Meta: ${metaId}
+                            </span>
+                        `;
+                    } else {
+                        phoneDisplayHtml = `
+                            <a href="https://wa.me/${order.phone}" target="_blank" class="phone-link">
+                                💬 ${order.phone}
+                            </a>
+                        `;
+                    }
 
                     let timelineHtml = '';
                     if (order.history && order.history.length > 0) {
@@ -3678,12 +3960,15 @@ async def dashboard():
 
                     card.innerHTML = `
                         <div class="card-header">
-                            <a href="https://wa.me/${order.phone}" target="_blank" class="phone-link">
-                                💬 ${order.phone}
-                            </a>
-                            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem">
-                                <span class="time">${timeStr}</span>
-                                ${liveDurationHtml}
+                            ${phoneDisplayHtml}
+                            <div style="display: flex; align-items: center; gap: 0.6rem">
+                                <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem">
+                                    <span class="time">${timeStr}</span>
+                                    ${liveDurationHtml}
+                                </div>
+                                <button class="btn-delete" title="Eliminar tarjeta" onclick="deleteOrder('${orderId}')">
+                                    🗑️
+                                </button>
                             </div>
                         </div>
                         
@@ -3707,8 +3992,8 @@ async def dashboard():
                                     let mp = order.metodo_pago;
                                     if (mp.toLowerCase().includes('confirmado')) {
                                         mp = mp.replace(/(confirmado)/i, '<span style="color:var(--success); font-weight:bold; background: rgba(16,185,129,0.1); padding: 2px 6px; border-radius: 4px; margin-left: 5px;">$1</span>');
-                                    } else if (mp.toLowerCase().includes('esperando') || mp.toLowerCase().includes('no confirmado')) {
-                                        mp = mp.replace(/(esperando.*pago|no confirmado)/i, '<span style="color:var(--warning); font-weight:bold; background: rgba(245,158,11,0.1); padding: 2px 6px; border-radius: 4px; margin-left: 5px;">$1</span>');
+                                    } else if (mp.toLowerCase().includes('esperando') || mp.toLowerCase().includes('no confirmado') || mp.toLowerCase().includes('pendiente')) {
+                                        mp = mp.replace(/(esperando.*pago|no confirmado|pendiente)/i, '<span style="color:var(--warning); font-weight:bold; background: rgba(245,158,11,0.1); padding: 2px 6px; border-radius: 4px; margin-left: 5px;">$1</span>');
                                     }
                                     return mp;
                                 })()}
