@@ -1386,21 +1386,50 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
             except:
                 tools_cfg = {}
 
+            # Determinar qué userbot enviará las notificaciones al grupo o vendedor
+            req_activar_opc = getattr(req, 'activaruserbotopcional', False)
+            req_userbot_opc = getattr(req, 'userbotopcional', None)
+            cfg_activar_opc = getattr(bot_config, 'activaruserbotopcional', False)
+            cfg_userbot_opc = getattr(bot_config, 'userbotopcional', None)
+
+            if req_activar_opc and req_userbot_opc:
+                notif_userbot = req_userbot_opc
+            elif cfg_activar_opc and cfg_userbot_opc:
+                notif_userbot = cfg_userbot_opc
+            elif req_userbot_opc:
+                notif_userbot = req_userbot_opc
+            else:
+                notif_userbot = bot_config.userbot_identifier or userbot
+
+            receiver_dest = (getattr(req, 'lineaogruponotificacion', None) or bot_config.lineaogruponotificacion or '').strip()
+
+            is_group_dest = False
+            if getattr(req, 'lineaogrupo', None) is not None:
+                is_group_dest = bool(req.lineaogrupo)
+            elif getattr(bot_config, 'es_grupo_notificacion', None) is not None:
+                is_group_dest = bool(bot_config.es_grupo_notificacion)
+
+            if receiver_dest and ("@g.us" in receiver_dest or (receiver_dest.isdigit() and len(receiver_dest) > 15)):
+                is_group_dest = True
+
             config_dict = {
                 "api_key": bot_config.apikey or req.apikey,
                 "ai_model": bot_config.ai_model or req.ai_model,
                 "tools_config": tools_cfg,
                 "bot_id": bot_config.id,
                 "userbot_identifier": bot_config.userbot_identifier,
+                "notification_userbot": notif_userbot,
+                "activaruserbotopcional": req_activar_opc or cfg_activar_opc,
+                "userbotopcional": req_userbot_opc or cfg_userbot_opc or '',
                 "use_google_search": bot_config.use_google_search or getattr(req, 'use_google_search', False),
                 "use_google_maps": bot_config.use_google_maps or getattr(req, 'use_google_maps', False),
                 "fallback_models": GEMINI_FALLBACK_MODELS_LIST,
                 "thinking_level": bot_config.thinking_level or getattr(req, 'thinking_level', 'HIGH'),
                 "thinking_budget": bot_config.thinking_budget if (bot_config.thinking_budget is not None) else getattr(req, 'thinking_budget', -1),
-                "server": getattr(req, 'server', ''),
+                "server": (getattr(req, 'server', '') or '').rstrip('/'),
                 "token": getattr(req, 'token', ''),
-                "receiver": getattr(req, 'lineaogruponotificacion', ''),
-                "is_group": getattr(req, 'lineaogrupo', False),
+                "receiver": receiver_dest,
+                "is_group": is_group_dest,
                 "user_phone": req.lineaWA,
                 "pos_endpoints": bot_config.pos_endpoints or '[]'
             }
@@ -1926,7 +1955,8 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
 
     return {
         "actions": actions_payload_for_whatsapp,
-        "estado_conversacion": estado_conv_from_ai
+        "estado_conversacion": estado_conv_from_ai,
+        "notification_tool_executed": bool(config_dict.get("notification_tool_executed", False)) if 'config_dict' in locals() and config_dict else False
     }
 
 
@@ -2058,7 +2088,8 @@ async def send_notification(server: str, userbot: str, token: str, receiver: str
     1. El detalle del pedido.
     2. El enlace del pedido (usuario) al final.
     """
-    send_url = f"{server}/chats/send?id={userbot}"
+    clean_server = (server or "").rstrip("/")
+    send_url = f"{clean_server}/chats/send?id={userbot}"
     headers = {"Content-Type": "application/json", "x-access-token": token}
 
     # Construir el mensaje de notificación (solo el enlace)
@@ -2087,8 +2118,14 @@ async def send_notification(server: str, userbot: str, token: str, receiver: str
     # Combinar ambos en un solo texto
     combined_message_text = f"{detail_message_text}\n\n{link_message_text}"
 
+    receiver_str = str(receiver or "").strip()
+    if not is_group and receiver_str:
+        if "@g.us" in receiver_str or (receiver_str.isdigit() and len(receiver_str) > 15):
+            is_group = True
+    is_group = bool(is_group)
+
     combined_payload = {
-        "receiver": receiver,
+        "receiver": receiver_str,
         "isGroup": is_group,
         "message": {
             "text": combined_message_text
@@ -2096,19 +2133,22 @@ async def send_notification(server: str, userbot: str, token: str, receiver: str
     }
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             print(
-                f"{log_prefix} Enviando notificación combinada (detalle + enlace) a {receiver} (grupo: {is_group})")
+                f"{log_prefix} 🚀 Enviando notificación combinada a {receiver_str} (grupo: {is_group}) usando userbot {userbot}...", flush=True)
 
             # Enviar el mensaje único
             resp = await client.post(send_url, headers=headers, json=combined_payload, timeout=30.0)
-            resp.raise_for_status()
-            print(
-                f"{log_prefix} Notificación combinada enviada exitosamente a {receiver}")
-
-            return True
+            if resp.status_code in [200, 201]:
+                print(
+                    f"{log_prefix} ✅ Notificación combinada enviada exitosamente a {receiver_str} -> HTTP {resp.status_code}", flush=True)
+                return True
+            else:
+                print(
+                    f"{log_prefix} ⚠️ Error respuesta WhatsApp al notificar ({send_url}) -> HTTP {resp.status_code}: {resp.text}", flush=True)
+                return False
     except Exception as e:
-        print(f"{log_prefix} Error enviando notificación combinada a {receiver}: {e}")
+        print(f"{log_prefix} ❌ Error enviando notificación combinada a {receiver_str}: {e}", flush=True)
         return False
 
 
@@ -2313,14 +2353,22 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
             ai_actions_payload = ai_response.get("actions", {})
             estado_conversacion_ai = ai_response.get("estado_conversacion", "")
 
-            # Lógica de notificación
+            # Lógica de notificación (Tool con Fallback o Legacy)
             notification_system_mode = os.getenv("NOTIFICATION_SYSTEM", "legacy").strip().lower()
-            if (notification_system_mode != "tool" and
-                current_task_req_info.activarnotificacion and
-                current_task_req_info.estado and
-                current_task_req_info.lineaogruponotificacion and
-                    estado_conversacion_ai == current_task_req_info.estado):
+            notif_tool_already_ran = ai_response.get("notification_tool_executed", False) if isinstance(ai_response, dict) else False
 
+            target_estado = current_task_req_info.estado
+            estado_matches = bool(target_estado and estado_conversacion_ai == target_estado)
+
+            should_run_notification_logic = False
+            if current_task_req_info.activarnotificacion and current_task_req_info.lineaogruponotificacion and estado_matches:
+                if notification_system_mode != "tool":
+                    should_run_notification_logic = True
+                elif not notif_tool_already_ran:
+                    print(f"{log_prefix} [FALLBACK] Modo tool activo pero Gemini no ejecutó enviar_notificacion_tool en estado '{estado_conversacion_ai}'. Disparando notificación fallback al grupo/línea.", flush=True)
+                    should_run_notification_logic = True
+
+            if should_run_notification_logic:
                 # --- Lógica de control de duplicados ---
                 notif_cache_key = f"{current_task_req_info.userbot}_{current_task_req_info.lineaWA}"
                 current_ts = time.time()
@@ -2492,10 +2540,37 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     print(
                                         f"{log_prefix} Pedido guardado en orders.json exitosamente.")
 
+                                    telefono_extraido = order_info.get("telefono", "").strip()
+                                    nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
+                                    
+                                    display_phone = current_task_req_info.lineaWA
+                                    if telefono_extraido:
+                                        import re
+                                        telefono_limpio = re.sub(r'\D', '', telefono_extraido)
+                                        if len(telefono_limpio) >= 10:
+                                            if len(telefono_limpio) == 10:
+                                                telefono_limpio = "57" + telefono_limpio
+                                            display_phone = telefono_limpio
+
+                                    cliente_str = display_phone
+                                    if nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
+                                        cliente_str = f"{nombre_extraido} ({display_phone})"
+
                                     # Despacho asíncrono a endpoints POS ERP configurados
                                     try:
                                         from services.tools import dispatch_order_to_pos_webhooks
-                                        pos_endpoints_str = config_dict.get("pos_endpoints", "[]") if 'config_dict' in locals() and config_dict else "[]"
+                                        pos_endpoints_str = "[]"
+                                        try:
+                                            from core.database import SessionLocal
+                                            from models import bot_models
+                                            _db_tmp = SessionLocal()
+                                            _b = _db_tmp.query(bot_models.BotConfig).filter(bot_models.BotConfig.userbot_identifier == current_task_req_info.userbot).first()
+                                            if _b and _b.pos_endpoints:
+                                                pos_endpoints_str = _b.pos_endpoints
+                                            _db_tmp.close()
+                                        except Exception:
+                                            pass
+
                                         dispatch_order_to_pos_webhooks(pos_endpoints_str, {
                                             "orderIdWA": order_id,
                                             "clienteTelefono": display_phone,
@@ -2510,28 +2585,12 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "userbot": userbot_notificacion or getattr(current_task_req_info, 'userbot', '')
                                         })
                                     except Exception as _pos_err:
-                                        print(f"{log_prefix} Error despachando POS webhook en fallback: {_pos_err}")
+                                        print(f"{log_prefix} Error despachando POS webhook en fallback: {_pos_err}", flush=True)
 
                                     # Cabecera dinámica según si es nuevo o modificado
                                     header_title = "🚨 *NUEVO PEDIDO* 🚨"
                                     if is_modification:
                                         header_title = "⚠️ *PEDIDO MODIFICADO* ⚠️"
-
-                                    telefono_extraido = order_info.get("telefono", "").strip()
-                                    nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
-                                    
-                                    display_phone = current_task_req_info.lineaWA
-                                    if telefono_extraido:
-                                        import re
-                                        telefono_limpio = re.sub(r'\D', '', telefono_extraido)
-                                        if len(telefono_limpio) >= 10:
-                                            if len(telefono_limpio) == 10:
-                                                telefono_limpio = "57" + telefono_limpio
-                                            display_phone = telefono_limpio
-
-                                    cliente_str = display_phone
-                                    if nombre_extraido and nombre_extraido.lower() != "no especificado":
-                                        cliente_str = f"{nombre_extraido} ({display_phone})"
 
                                     notification_text = (
                                         f"{header_title}\n\n"
@@ -2543,20 +2602,26 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         f"🤖 *Resumen IA:* {order_info.get('resumen', '')}"
                                     )
 
+                                    # Auto-detectar si el destino es un grupo
+                                    receiver_dest = str(current_task_req_info.lineaogruponotificacion or '').strip()
+                                    is_group_dest = bool(current_task_req_info.lineaogrupo)
+                                    if not is_group_dest and ("@g.us" in receiver_dest or (receiver_dest.isdigit() and len(receiver_dest) > 15)):
+                                        is_group_dest = True
+
                                     # Enviar la notificación
                                     success = await send_notification(
                                         current_task_req_info.server,
                                         userbot_notificacion,
                                         current_task_req_info.token,
-                                        current_task_req_info.lineaogruponotificacion,
-                                        current_task_req_info.lineaogrupo or False,
+                                        receiver_dest,
+                                        is_group_dest,
                                         display_phone,
                                         notification_text,
                                         log_prefix
                                     )
                                     if success:
                                         print(
-                                            f"{log_prefix} Notificación enviada exitosamente con detalle completo.")
+                                            f"{log_prefix} Notificación enviada exitosamente con detalle completo.", flush=True)
                             except Exception as e:
                                 print(
                                     f"{log_prefix} Error armando notificación y guardando pedido: {e}")
@@ -2667,6 +2732,7 @@ async def handle_incoming_message(req: MessageRequest):
                 activarnotificacion=req.activarnotificacion,
                 estado_notificacion=req.estado,
                 lineaogruponotificacion=req.lineaogruponotificacion,
+                es_grupo_notificacion=bool(req.lineaogrupo) if req.lineaogrupo is not None else ("@g.us" in str(req.lineaogruponotificacion or "") or (str(req.lineaogruponotificacion or "").isdigit() and len(str(req.lineaogruponotificacion or "")) > 15)),
                 activaruserbotopcional=req.activaruserbotopcional,
                 userbotopcional=req.userbotopcional,
                 numerodemensajes=getattr(req, 'numerodemensajes', 30),
@@ -2704,6 +2770,22 @@ async def handle_incoming_message(req: MessageRequest):
                 updated = True
             if db_bot.lineaogruponotificacion != req.lineaogruponotificacion:
                 db_bot.lineaogruponotificacion = req.lineaogruponotificacion
+                updated = True
+            if req.lineaogrupo is not None:
+                new_es_grupo = bool(req.lineaogrupo)
+                if db_bot.es_grupo_notificacion != new_es_grupo:
+                    db_bot.es_grupo_notificacion = new_es_grupo
+                    updated = True
+            elif req.lineaogruponotificacion:
+                auto_grupo = ("@g.us" in str(req.lineaogruponotificacion) or (str(req.lineaogruponotificacion).isdigit() and len(str(req.lineaogruponotificacion)) > 15))
+                if auto_grupo and not db_bot.es_grupo_notificacion:
+                    db_bot.es_grupo_notificacion = True
+                    updated = True
+            if req.activaruserbotopcional is not None and db_bot.activaruserbotopcional != req.activaruserbotopcional:
+                db_bot.activaruserbotopcional = req.activaruserbotopcional
+                updated = True
+            if req.userbotopcional is not None and db_bot.userbotopcional != req.userbotopcional:
+                db_bot.userbotopcional = req.userbotopcional
                 updated = True
             
             new_num = getattr(req, 'numerodemensajes', 30)

@@ -108,6 +108,12 @@ def call_model(state: AgentState):
         
     if tools_cfg.get("enviar_notificacion", True):
         available_tools.append(enviar_notificacion_tool)
+        reglas_herramientas_extra += (
+            "⚠️ REGLA OBLIGATORIA DE NOTIFICACIÓN DE PEDIDO (`enviar_notificacion_tool`):\n"
+            "Cuando el cliente confirme o cierre su pedido (productos elegidos, total, método de pago y dirección de entrega acordados), "
+            "DEBES invocar la herramienta `enviar_notificacion_tool` ANTES de emitir tu respuesta final en JSON. "
+            "Esto notifica de inmediato al grupo/vendedor y registra la venta en el sistema.\n\n"
+        )
         
     # Añadir herramientas nativas de Google (Search, Maps) si están habilitadas
     use_google_search = bot_config.get("use_google_search", False)

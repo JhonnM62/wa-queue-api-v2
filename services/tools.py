@@ -89,15 +89,31 @@ def enviar_notificacion_tool(
 
     config_dict = config["configurable"].get("config_dict", {})
     
-    server_url = config_dict.get("server")
-    token = config_dict.get("token")
-    receiver = config_dict.get("receiver")
+    server_url = (config_dict.get("server") or "").strip()
+    token = config_dict.get("token") or ""
+    receiver = (config_dict.get("receiver") or config_dict.get("lineaogruponotificacion") or "").strip()
     is_group = config_dict.get("is_group", False)
     userbot = config_dict.get("userbot_identifier")
     user_phone = config_dict.get("user_phone", "")
 
-    if not server_url or not receiver:
-        return "Fallo: No se encontraron los datos del servidor o del receptor para notificar."
+    # Auto-detectar si el receiver es grupo por formato (@g.us o numérico de >15 dígitos)
+    if not is_group and receiver:
+        if "@g.us" in receiver or (receiver.isdigit() and len(receiver) > 15):
+            is_group = True
+    is_group = bool(is_group)
+
+    # Determinar qué userbot enviará la notificación al grupo/línea
+    notification_userbot = (
+        config_dict.get("notification_userbot")
+        or (config_dict.get("userbotopcional") if config_dict.get("activaruserbotopcional") else None)
+        or config_dict.get("userbotopcional")
+        or config_dict.get("userbot_identifier")
+        or userbot
+    )
+
+    if not server_url or not receiver or not notification_userbot:
+        print(f"[tools/enviar_notificacion/{user_phone}] ⚠️ Fallo al notificar: server_url='{server_url}', receiver='{receiver}', notif_userbot='{notification_userbot}'", flush=True)
+        return "Fallo: No se encontraron los datos del servidor, receptor o userbot para notificar."
 
     # 1. Guardar en el dashboard (orders.json)
     ORDERS_FILE_PATH = "./Download/AutoSystem/orders.json"
@@ -195,8 +211,10 @@ def enviar_notificacion_tool(
                 old_tot = clean_str(existing_order.get("total_a_cobrar", ""))
                 new_tot = clean_str(total_a_cobrar)
                 
-                # Si el detalle (productos) y el total son iguales, lo consideramos duplicado exacto para no mandar spam a WhatsApp.
-                if old_det == new_det and old_tot == new_tot:
+                # Solo omitir si el detalle y total son iguales Y ya se envió a WhatsApp recientemente (menos de 5 min)
+                last_wa_ts = existing_order.get("wa_notified_timestamp", 0)
+                sec_since_notif = (order_timestamp - last_wa_ts) / 1000 if last_wa_ts else 999999
+                if old_det == new_det and old_tot == new_tot and last_wa_ts and sec_since_notif < 300:
                     is_exact_duplicate = True
 
             # ACTUALIZAR in-place: preservar timestamp original, status e historial
@@ -266,20 +284,28 @@ def enviar_notificacion_tool(
             "metodoPagoWA": metodo_pago,
             "timestamp": order_timestamp,
             "isModification": is_modification,
-            "userbot": userbot
+            "userbot": config_dict.get("userbot_identifier") or userbot
         }
         dispatch_order_to_pos_webhooks(pos_endpoints_cfg, order_webhook_payload)
 
+        # Registrar timestamp de notificación en orders_data para prevenir duplicados en ventana corta
+        if order_id in orders_data:
+            orders_data[order_id]["wa_notified_timestamp"] = order_timestamp
+            with open(ORDERS_FILE_PATH, 'w', encoding='utf-8') as f:
+                json.dump(orders_data, f, ensure_ascii=False, indent=4)
+
     except Exception as e:
-        print(f"[tools/enviar_notificacion/{user_phone}] Error al guardar en dashboard: {e}")
+        print(f"[tools/enviar_notificacion/{user_phone}] Error al guardar en dashboard: {e}", flush=True)
 
     # --- NUEVO: Omitir spam de WhatsApp si es un cambio menor (duplicado exacto) ---
     if is_exact_duplicate:
-        print(f"[tools/enviar_notificacion/{user_phone}] Omitiendo notificación por WhatsApp porque el detalle y total no cambiaron.")
+        print(f"[tools/enviar_notificacion/{user_phone}] Omitiendo notificación por WhatsApp porque el detalle y total no cambiaron recientemente.", flush=True)
+        config_dict["notification_tool_executed"] = True
         return "Notificación omitida por duplicado exacto, pero pedido actualizado en dashboard."
 
-    # 2. Enviar notificación HTTP a WhatsApp
-    send_url = f"{server_url}/chats/send?id={userbot}"
+    # 2. Enviar notificación HTTP a WhatsApp usando el userbot designado (opcional o principal)
+    clean_server_url = (server_url or "").rstrip("/")
+    send_url = f"{clean_server_url}/chats/send?id={notification_userbot}"
     headers = {"Content-Type": "application/json", "x-access-token": token}
     
     if len(display_phone) >= 14 and display_phone.isdigit():
@@ -304,7 +330,7 @@ def enviar_notificacion_tool(
 
     combined_payload = {
         "receiver": receiver,
-        "isGroup": is_group,
+        "isGroup": bool(is_group),
         "message": {
             "text": combined_message_text
         }
@@ -312,10 +338,16 @@ def enviar_notificacion_tool(
 
     def _send_wa_notification_async():
         try:
-            resp = httpx.post(send_url, headers=headers, json=combined_payload, timeout=20.0)
-            print(f"[tools/enviar_notificacion/{user_phone}] Notificación WhatsApp enviada al grupo -> HTTP {resp.status_code}")
+            print(f"[tools/enviar_notificacion/{user_phone}] 🚀 Enviando a WhatsApp: url={send_url}, receiver={receiver}, isGroup={bool(is_group)}, sender_bot={notification_userbot}", flush=True)
+            with httpx.Client(timeout=25.0, verify=False) as client:
+                resp = client.post(send_url, headers=headers, json=combined_payload)
+                if resp.status_code in [200, 201]:
+                    print(f"[tools/enviar_notificacion/{user_phone}] ✅ Notificación WhatsApp enviada con éxito al grupo/línea -> HTTP {resp.status_code}", flush=True)
+                else:
+                    print(f"[tools/enviar_notificacion/{user_phone}] ⚠️ Error respuesta WhatsApp ({send_url}) -> HTTP {resp.status_code}: {resp.text}", flush=True)
         except Exception as e:
-            print(f"[tools/enviar_notificacion/{user_phone}] Error enviando notificación WhatsApp: {e}")
+            print(f"[tools/enviar_notificacion/{user_phone}] ❌ Excepción enviando notificación WhatsApp: {e}", flush=True)
 
     threading.Thread(target=_send_wa_notification_async, daemon=True).start()
+    config_dict["notification_tool_executed"] = True
     return "Notificación encolada y pedido registrado en dashboard exitosamente."
