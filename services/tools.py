@@ -111,8 +111,18 @@ def enviar_notificacion_tool(
         or userbot
     )
 
-    if not server_url or not receiver or not notification_userbot:
-        print(f"[tools/enviar_notificacion/{user_phone}] ⚠️ Fallo al notificar: server_url='{server_url}', receiver='{receiver}', notif_userbot='{notification_userbot}'", flush=True)
+    clean_server_url = (server_url or "").rstrip("/")
+
+    print(f"[tools/enviar_notificacion/{user_phone}] 🔔 [NOTIF-TOOL] Invocada por Gemini para {user_phone}:", flush=True)
+    print(f"[tools/enviar_notificacion/{user_phone}]    - Cliente: '{nombre_cliente}' ({telefono_cliente})", flush=True)
+    print(f"[tools/enviar_notificacion/{user_phone}]    - Total: {total_a_cobrar} | Pago: {metodo_pago}", flush=True)
+    print(f"[tools/enviar_notificacion/{user_phone}]    - Dirección: {direccion_envio}", flush=True)
+    print(f"[tools/enviar_notificacion/{user_phone}]    - Resumen: {resumen_general}", flush=True)
+    print(f"[tools/enviar_notificacion/{user_phone}]    - Destino WhatsApp: receiver='{receiver}', is_group={is_group}", flush=True)
+    print(f"[tools/enviar_notificacion/{user_phone}]    - Emisor WhatsApp: sender_bot='{notification_userbot}' (server: '{clean_server_url}')", flush=True)
+
+    if not clean_server_url or not receiver or not notification_userbot:
+        print(f"[tools/enviar_notificacion/{user_phone}] ❌ [NOTIF-TOOL] ABORTADO: Faltan datos (server_url='{clean_server_url}', receiver='{receiver}', notif_userbot='{notification_userbot}')", flush=True)
         return "Fallo: No se encontraron los datos del servidor, receptor o userbot para notificar."
 
     # 1. Guardar en el dashboard (orders.json)
@@ -299,7 +309,7 @@ def enviar_notificacion_tool(
 
     # --- NUEVO: Omitir spam de WhatsApp si es un cambio menor (duplicado exacto) ---
     if is_exact_duplicate:
-        print(f"[tools/enviar_notificacion/{user_phone}] Omitiendo notificación por WhatsApp porque el detalle y total no cambiaron recientemente.", flush=True)
+        print(f"[tools/enviar_notificacion/{user_phone}] ⚠️ [NOTIF-TOOL] Omitiendo notificación por WhatsApp porque el detalle y total no cambiaron recientemente (duplicado exacto).", flush=True)
         config_dict["notification_tool_executed"] = True
         return "Notificación omitida por duplicado exacto, pero pedido actualizado en dashboard."
 
@@ -338,16 +348,17 @@ def enviar_notificacion_tool(
 
     def _send_wa_notification_async():
         try:
-            print(f"[tools/enviar_notificacion/{user_phone}] 🚀 Enviando a WhatsApp: url={send_url}, receiver={receiver}, isGroup={bool(is_group)}, sender_bot={notification_userbot}", flush=True)
+            print(f"[tools/enviar_notificacion/{user_phone}] 🚀 [NOTIF-THREAD] Enviando a WhatsApp: url={send_url}, receiver={receiver}, isGroup={bool(is_group)}, sender_bot={notification_userbot}", flush=True)
             with httpx.Client(timeout=25.0, verify=False) as client:
                 resp = client.post(send_url, headers=headers, json=combined_payload)
                 if resp.status_code in [200, 201]:
-                    print(f"[tools/enviar_notificacion/{user_phone}] ✅ Notificación WhatsApp enviada con éxito al grupo/línea -> HTTP {resp.status_code}", flush=True)
+                    print(f"[tools/enviar_notificacion/{user_phone}] ✅ [NOTIF-THREAD] ¡ÉXITO! Notificación enviada al grupo/línea -> HTTP {resp.status_code}: {resp.text[:120]}", flush=True)
                 else:
-                    print(f"[tools/enviar_notificacion/{user_phone}] ⚠️ Error respuesta WhatsApp ({send_url}) -> HTTP {resp.status_code}: {resp.text}", flush=True)
+                    print(f"[tools/enviar_notificacion/{user_phone}] ❌ [NOTIF-THREAD] ERROR respuesta WhatsApp ({send_url}) -> HTTP {resp.status_code}: {resp.text}", flush=True)
         except Exception as e:
-            print(f"[tools/enviar_notificacion/{user_phone}] ❌ Excepción enviando notificación WhatsApp: {e}", flush=True)
+            print(f"[tools/enviar_notificacion/{user_phone}] 💥 [NOTIF-THREAD] Excepción enviando notificación: {e}", flush=True)
 
     threading.Thread(target=_send_wa_notification_async, daemon=True).start()
     config_dict["notification_tool_executed"] = True
+    print(f"[tools/enviar_notificacion/{user_phone}] 📌 [NOTIF-TOOL] Hilo de envío a WhatsApp iniciado (notification_tool_executed=True).", flush=True)
     return "Notificación encolada y pedido registrado en dashboard exitosamente."

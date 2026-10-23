@@ -1433,6 +1433,14 @@ async def process_message_final(req: MessageRequest, message_fragments: List[str
                 "user_phone": req.lineaWA,
                 "pos_endpoints": bot_config.pos_endpoints or '[]'
             }
+            print(
+                f"{log_prefix} 🔔 [NOTIF-CONFIG] Configuración de Notificación lista:\n"
+                f"   - receiver: '{receiver_dest}' (is_group={is_group_dest})\n"
+                f"   - sender_bot: '{notif_userbot}' (req_opc='{req_userbot_opc}', cfg_opc='{cfg_userbot_opc}')\n"
+                f"   - activarnotificacion: {getattr(req, 'activarnotificacion', None)} (estado esperado: '{getattr(req, 'estado', None)}')\n"
+                f"   - server: '{config_dict.get('server')}'",
+                flush=True
+            )
         db.close()
     except Exception as e:
         print(f"{log_prefix} ❌ Error verificando BD: {e}")
@@ -2135,20 +2143,20 @@ async def send_notification(server: str, userbot: str, token: str, receiver: str
     try:
         async with httpx.AsyncClient(verify=False) as client:
             print(
-                f"{log_prefix} 🚀 Enviando notificación combinada a {receiver_str} (grupo: {is_group}) usando userbot {userbot}...", flush=True)
+                f"{log_prefix} 🚀 [NOTIF-FALLBACK] Enviando notificación a {receiver_str} (isGroup: {is_group}) usando sender_bot={userbot}...", flush=True)
 
             # Enviar el mensaje único
             resp = await client.post(send_url, headers=headers, json=combined_payload, timeout=30.0)
             if resp.status_code in [200, 201]:
                 print(
-                    f"{log_prefix} ✅ Notificación combinada enviada exitosamente a {receiver_str} -> HTTP {resp.status_code}", flush=True)
+                    f"{log_prefix} ✅ [NOTIF-FALLBACK] ¡ÉXITO! Notificación enviada a {receiver_str} -> HTTP {resp.status_code}: {resp.text[:120]}", flush=True)
                 return True
             else:
                 print(
-                    f"{log_prefix} ⚠️ Error respuesta WhatsApp al notificar ({send_url}) -> HTTP {resp.status_code}: {resp.text}", flush=True)
+                    f"{log_prefix} ❌ [NOTIF-FALLBACK] Error respuesta WhatsApp al notificar ({send_url}) -> HTTP {resp.status_code}: {resp.text}", flush=True)
                 return False
     except Exception as e:
-        print(f"{log_prefix} ❌ Error enviando notificación combinada a {receiver_str}: {e}", flush=True)
+        print(f"{log_prefix} 💥 [NOTIF-FALLBACK] Error enviando notificación a {receiver_str}: {e}", flush=True)
         return False
 
 
@@ -2358,15 +2366,46 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
             notif_tool_already_ran = ai_response.get("notification_tool_executed", False) if isinstance(ai_response, dict) else False
 
             target_estado = current_task_req_info.estado
-            estado_matches = bool(target_estado and estado_conversacion_ai == target_estado)
+
+            def _normalize_estado(e: str) -> str:
+                if not e:
+                    return ""
+                import re
+                # Quita prefijos numéricos como "2. ", "1 - ", "3) " y espacios
+                cleaned = re.sub(r'^\s*\(?\d+[\.\-\)]\s*', '', str(e).strip().lower())
+                return cleaned.strip()
+
+            norm_target = _normalize_estado(target_estado)
+            norm_ai = _normalize_estado(estado_conversacion_ai)
+            estado_matches = bool(
+                target_estado and (
+                    estado_conversacion_ai == target_estado
+                    or (norm_target and norm_target == norm_ai)
+                    or (norm_target and norm_target in norm_ai)
+                    or (norm_ai and norm_ai in norm_target)
+                )
+            )
 
             should_run_notification_logic = False
             if current_task_req_info.activarnotificacion and current_task_req_info.lineaogruponotificacion and estado_matches:
                 if notification_system_mode != "tool":
                     should_run_notification_logic = True
                 elif not notif_tool_already_ran:
-                    print(f"{log_prefix} [FALLBACK] Modo tool activo pero Gemini no ejecutó enviar_notificacion_tool en estado '{estado_conversacion_ai}'. Disparando notificación fallback al grupo/línea.", flush=True)
+                    print(f"{log_prefix} ⚠️ [NOTIF-FALLBACK] Modo tool activo pero Gemini no ejecutó enviar_notificacion_tool en estado '{estado_conversacion_ai}'. Disparando notificación fallback al grupo/línea.", flush=True)
                     should_run_notification_logic = True
+
+            print(
+                f"{log_prefix} 🔍 [NOTIF-CHECK] Verificando notificación:\n"
+                f"   - activarnotificacion: {current_task_req_info.activarnotificacion}\n"
+                f"   - lineaogruponotificacion: '{current_task_req_info.lineaogruponotificacion}'\n"
+                f"   - estado_esperado (target): '{target_estado}' (norm: '{norm_target}')\n"
+                f"   - estado_actual_ai: '{estado_conversacion_ai}' (norm: '{norm_ai}')\n"
+                f"   - estado_coincide: {estado_matches}\n"
+                f"   - tool_ya_ejecutado: {notif_tool_already_ran}\n"
+                f"   - notification_system_mode: '{notification_system_mode}'\n"
+                f"   - should_run_notification: {should_run_notification_logic}",
+                flush=True
+            )
 
             if should_run_notification_logic:
                 # --- Lógica de control de duplicados ---
@@ -2386,11 +2425,11 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                         time_diff = current_ts - last_ts
                         if time_diff < RENOTIFICATION_TIMEOUT_SECONDS:
                             print(
-                                f"{log_prefix} Estado '{estado_conversacion_ai}' ya notificado hace {int(time_diff)}s. Omitiendo duplicado.")
+                                f"{log_prefix} ⚠️ [NOTIF-CHECK] Estado '{estado_conversacion_ai}' ya notificado hace {int(time_diff)}s (<{RENOTIFICATION_TIMEOUT_SECONDS}s). Omitiendo duplicado en fallback.", flush=True)
                             should_notify = False
                         else:
                             print(
-                                f"{log_prefix} Estado '{estado_conversacion_ai}' re-notificando tras {int(time_diff)}s (timeout superado).")
+                                f"{log_prefix} 🔔 [NOTIF-CHECK] Estado '{estado_conversacion_ai}' re-notificando tras {int(time_diff)}s (timeout superado).", flush=True)
 
                 if should_notify:
                     # Determinar qué userbot usar para la notificación
@@ -2398,10 +2437,10 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                     if current_task_req_info.activaruserbotopcional and current_task_req_info.userbotopcional:
                         userbot_notificacion = current_task_req_info.userbotopcional
                         print(
-                            f"{log_prefix} Usando userbot opcional para notificación: {userbot_notificacion}")
+                            f"{log_prefix} 🤖 [NOTIF-FALLBACK] Usando userbot opcional para notificación: {userbot_notificacion}", flush=True)
 
                     print(
-                        f"{log_prefix} Estado de conversación coincide ('{estado_conversacion_ai}'). Extrayendo datos con IA antes de notificar...")
+                        f"{log_prefix} 🚀 [NOTIF-FALLBACK] Estado de conversación coincide ('{estado_conversacion_ai}'). Extrayendo datos con IA antes de notificar...", flush=True)
                     try:
                         order_info = await extract_order_info_with_ai(current_task_req_info.userbot, current_task_req_info.lineaWA, current_task_req_info.apikey, current_task_req_info.ai_model)
 
@@ -2491,7 +2530,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
 
                                 if is_exact_duplicate:
                                     print(
-                                        f"{log_prefix} El detalle y total del pedido no han cambiado. Omitiendo notificación duplicada.")
+                                        f"{log_prefix} ⚠️ [NOTIF-FALLBACK] El detalle y total del pedido no han cambiado. Omitiendo notificación duplicada en fallback.", flush=True)
                                     # No guardamos nada en orders.json ni enviamos mensaje de WhatsApp de notificación
                                 else:
                                     # Actualizar caché de notificación
@@ -2515,7 +2554,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         orders_data[order_id]["metodo_pago"] = order_info.get(
                                             "metodo_pago", "")
                                         print(
-                                            f"{log_prefix} Actualizando pedido existente para evitar duplicados en el dashboard.")
+                                            f"{log_prefix} 🔄 [NOTIF-FALLBACK] Actualizando pedido existente en dashboard (ID: {order_id}).", flush=True)
                                     else:
                                         # Es un pedido completamente nuevo
                                         orders_data[order_id] = {
@@ -2538,7 +2577,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         json.dump(orders_data, f,
                                                   ensure_ascii=False, indent=4)
                                     print(
-                                        f"{log_prefix} Pedido guardado en orders.json exitosamente.")
+                                        f"{log_prefix} 📝 [NOTIF-FALLBACK] Pedido guardado en orders.json exitosamente (ID: {order_id}).", flush=True)
 
                                     telefono_extraido = order_info.get("telefono", "").strip()
                                     nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
@@ -2608,6 +2647,14 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     if not is_group_dest and ("@g.us" in receiver_dest or (receiver_dest.isdigit() and len(receiver_dest) > 15)):
                                         is_group_dest = True
 
+                                    print(
+                                        f"{log_prefix} 📡 [NOTIF-FALLBACK] Enviando notificación al destino:\n"
+                                        f"   - receiver: '{receiver_dest}' (isGroup={is_group_dest})\n"
+                                        f"   - sender_bot: '{userbot_notificacion}'\n"
+                                        f"   - server: '{current_task_req_info.server}'",
+                                        flush=True
+                                    )
+
                                     # Enviar la notificación
                                     success = await send_notification(
                                         current_task_req_info.server,
@@ -2621,7 +2668,10 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     )
                                     if success:
                                         print(
-                                            f"{log_prefix} Notificación enviada exitosamente con detalle completo.", flush=True)
+                                            f"{log_prefix} ✅ [NOTIF-FALLBACK] Proceso de notificación completado con éxito.", flush=True)
+                                    else:
+                                        print(
+                                            f"{log_prefix} ❌ [NOTIF-FALLBACK] El envío de notificación falló (revisar respuesta HTTP).", flush=True)
                             except Exception as e:
                                 print(
                                     f"{log_prefix} Error armando notificación y guardando pedido: {e}")
@@ -2692,6 +2742,7 @@ async def handle_incoming_message(req: MessageRequest):
     print(f"{log_prefix}    - activarnotificacion: {req.activarnotificacion}")
     print(f"{log_prefix}    - estado para notificar: {req.estado}")
     print(f"{log_prefix}    - lineaogruponotificacion: {req.lineaogruponotificacion}")
+    print(f"{log_prefix}    - lineaogrupo (esGrupo): {req.lineaogrupo}")
     print(f"{log_prefix}    - mensaje_reciente: {req.mensaje_reciente}")
     print(f"{log_prefix}    - prompt recibido (primeros 50 chars): {str(req.promt)[:50]}...")
 
