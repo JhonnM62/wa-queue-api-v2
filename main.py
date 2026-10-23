@@ -3271,24 +3271,36 @@ async def dashboard():
                 cursor: pointer;
             }
             .btn-delete {
-                background: rgba(239, 68, 68, 0.12);
-                border: 1px solid rgba(239, 68, 68, 0.3);
-                color: #f87171;
-                border-radius: 6px;
-                padding: 0.35rem 0.55rem;
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                color: var(--text-muted);
+                width: 32px;
+                height: 32px;
+                border-radius: 8px;
                 cursor: pointer;
-                font-size: 0.9rem;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                transition: all 0.2s ease;
-                line-height: 1;
+                transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+                padding: 0;
+                outline: none;
+                flex-shrink: 0;
             }
             .btn-delete:hover {
-                background: #ef4444;
-                color: white;
+                background: rgba(239, 68, 68, 0.15);
+                border-color: rgba(239, 68, 68, 0.4);
+                color: #f87171;
+                transform: translateY(-1px) scale(1.06);
+                box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+            }
+            .btn-delete:active {
+                transform: translateY(0) scale(0.96);
+            }
+            .btn-delete svg {
+                transition: transform 0.2s ease;
+            }
+            .btn-delete:hover svg {
                 transform: scale(1.08);
-                box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
             }
             .badge-meta {
                 background: rgba(168, 85, 247, 0.2);
@@ -3966,8 +3978,12 @@ async def dashboard():
                                     <span class="time">${timeStr}</span>
                                     ${liveDurationHtml}
                                 </div>
-                                <button class="btn-delete" title="Eliminar tarjeta" onclick="deleteOrder('${orderId}')">
-                                    🗑️
+                                <button class="btn-delete" title="Eliminar pedido permanentemente" onclick="deleteOrder('${orderId}')">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                                        <line x1="10" y1="11" x2="10" y2="17"></line>
+                                        <line x1="14" y1="11" x2="14" y2="17"></line>
+                                    </svg>
                                 </button>
                             </div>
                         </div>
