@@ -28,7 +28,7 @@ from prompt_config import (
     EXAMPLE_JSON_STRUCTURE,
     get_prompt_template
 )
-from core.phone_utils import is_meta_identifier, clean_real_phone, get_meta_directive_prompt
+from core.phone_utils import is_meta_identifier, clean_real_phone, get_meta_directive_prompt, resolve_order_phones
 
 # Cargar variables de entorno del archivo .env
 load_dotenv()
@@ -2094,7 +2094,7 @@ async def send_whatsapp(server: str, userbot: str, token: str, phone: str, paylo
                 f"{log_prefix} Warn: Could not send final 'paused' presence: {e_final_pres}")
 
 
-async def send_notification(server: str, userbot: str, token: str, receiver: str, is_group: bool, linea_wa: str, notification_content=None, log_prefix: str = ""):
+async def send_notification(server: str, userbot: str, token: str, receiver: str, is_group: bool, linea_wa: str, notification_content=None, log_prefix: str = "", link_message_text: Optional[str] = None):
     """
     Envía una notificación al endpoint POST /chats/send cuando se completa un estado específico.
     Envía un solo mensaje combinado que contiene:
@@ -2106,10 +2106,11 @@ async def send_notification(server: str, userbot: str, token: str, receiver: str
     headers = {"Content-Type": "application/json", "x-access-token": token}
 
     # Construir el mensaje de notificación (solo el enlace)
-    if is_meta_identifier(linea_wa):
-        link_message_text = f"⚠️ Contacto Meta / Anónimo: {linea_wa}\n🚨 ATENCIÓN: El cliente tiene el número oculto o es usuario de Meta. El domiciliario no puede llamarlo por enlace wa.me."
-    else:
-        link_message_text = f"https://wa.me/{linea_wa}"
+    if not link_message_text:
+        if is_meta_identifier(linea_wa):
+            link_message_text = f"⚠️ Contacto Meta / Anónimo: {linea_wa}\n🚨 ATENCIÓN: El cliente tiene el número oculto o es usuario de Meta. El domiciliario no puede llamarlo por enlace wa.me."
+        else:
+            link_message_text = f"https://wa.me/{linea_wa}"
 
     # Construir el mensaje con el detalle de la IA
     detail_message_text = "(No se pudo extraer el detalle del pedido de la IA)"
@@ -2500,17 +2501,16 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 telefono_extraido = order_info.get("telefono", "").strip()
                                 nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
 
-                                is_meta = is_meta_identifier(current_task_req_info.lineaWA)
-                                real_phone = clean_real_phone(telefono_extraido) if telefono_extraido else ""
-                                display_phone = real_phone if real_phone else current_task_req_info.lineaWA
-
-                                cliente_str = display_phone
-                                if is_meta and real_phone:
-                                    cliente_str = f"{nombre_extraido} ({real_phone}) [Meta ID: {current_task_req_info.lineaWA}]" if nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"] else f"{real_phone} [Meta ID: {current_task_req_info.lineaWA}]"
-                                elif is_meta and not real_phone:
-                                    cliente_str = f"⚠️ [Sin número real] Meta ID: {current_task_req_info.lineaWA}" if not nombre_extraido or nombre_extraido.lower() in ["", "no especificado", "no aplica", "n/a", "na"] else f"{nombre_extraido} ⚠️ [Sin número real] (Meta ID: {current_task_req_info.lineaWA})"
-                                elif nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
-                                    cliente_str = f"{nombre_extraido} ({display_phone})"
+                                phone_info = resolve_order_phones(
+                                    api_linea_wa=current_task_req_info.lineaWA,
+                                    provided_phone=telefono_extraido,
+                                    nombre_cliente=nombre_extraido
+                                )
+                                is_meta = phone_info["is_meta"]
+                                display_phone = phone_info["display_phone"]
+                                assigned_phone = phone_info["assigned_phone"]
+                                cliente_str = phone_info["cliente_str"]
+                                real_phone = phone_info["extracted_phone"] if is_meta else ""
 
                                 is_modification = False
                                 existing_order_id = None
@@ -2520,8 +2520,9 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     matches_user = (
                                         odata.get("phone") == current_task_req_info.lineaWA
                                         or odata.get("phone") == display_phone
+                                        or odata.get("phone") == assigned_phone
                                         or odata.get("meta_identifier") == current_task_req_info.lineaWA
-                                        or (real_phone and odata.get("extracted_phone") == real_phone)
+                                        or (phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
                                     )
                                     if matches_user and odata.get("status") != "Despachados":
                                         order_ts = odata.get("timestamp", 0)
@@ -2582,9 +2583,9 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "direccion", "")
                                         orders_data[order_id]["metodo_pago"] = order_info.get(
                                             "metodo_pago", "")
-                                        if real_phone:
-                                            orders_data[order_id]["phone"] = real_phone
-                                            orders_data[order_id]["extracted_phone"] = real_phone
+                                        orders_data[order_id]["phone"] = assigned_phone
+                                        if phone_info["extracted_phone"]:
+                                            orders_data[order_id]["extracted_phone"] = phone_info["extracted_phone"]
                                         if is_meta:
                                             orders_data[order_id]["meta_identifier"] = current_task_req_info.lineaWA
                                         if nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
@@ -2595,7 +2596,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         # Es un pedido completamente nuevo
                                         orders_data[order_id] = {
                                             "id": order_id,
-                                            "phone": real_phone if real_phone else current_task_req_info.lineaWA,
+                                            "phone": assigned_phone,
                                             "meta_identifier": current_task_req_info.lineaWA if is_meta else None,
                                             "summary": order_info.get("resumen", ""),
                                             "pedido": order_info.get("pedido", ""),
@@ -2608,7 +2609,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "static_duration": 0,
                                             "history": [{"status": "Recientes", "timestamp": order_timestamp}],
                                             "origen": "fallback_sdk",
-                                            "extracted_phone": real_phone or (telefono_extraido if telefono_extraido else None),
+                                            "extracted_phone": phone_info["extracted_phone"],
                                             "extracted_name": nombre_extraido
                                         }
 
@@ -2687,7 +2688,8 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         is_group_dest,
                                         display_phone,
                                         notification_text,
-                                        log_prefix
+                                        log_prefix,
+                                        link_message_text=phone_info["link_message_text"]
                                     )
                                     if success:
                                         print(
@@ -3908,8 +3910,8 @@ async def dashboard():
 
                     // Header del teléfono / Meta ID
                     let phoneDisplayHtml = '';
-                    const realPhone = order.extracted_phone && !isMetaPhone(order.extracted_phone) ? order.extracted_phone : (!isMetaPhone(order.phone) ? order.phone : '');
                     const metaId = order.meta_identifier || (isMetaPhone(order.phone) ? order.phone : null);
+                    const realPhone = metaId ? (order.phone && !isMetaPhone(order.phone) ? order.phone : (order.extracted_phone && !isMetaPhone(order.extracted_phone) ? order.extracted_phone : '')) : (order.phone || '');
 
                     if (realPhone) {
                         phoneDisplayHtml = `

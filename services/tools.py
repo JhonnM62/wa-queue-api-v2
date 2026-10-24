@@ -1,7 +1,7 @@
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from services.rag_service import search_knowledge
-from core.phone_utils import is_meta_identifier, clean_real_phone
+from core.phone_utils import is_meta_identifier, clean_real_phone, resolve_order_phones
 
 
 @tool
@@ -171,19 +171,16 @@ def enviar_notificacion_tool(
     total_a_cobrar = format_money(total_a_cobrar)
 
     is_meta = is_meta_identifier(user_phone)
-    real_phone = ""
-    if telefono_cliente and telefono_cliente.strip():
-        real_phone = clean_real_phone(telefono_cliente)
-    
-    display_phone = real_phone if real_phone else user_phone
-
-    cliente_str = display_phone
-    if is_meta and real_phone:
-        cliente_str = f"{nombre_cliente.strip()} ({real_phone}) [Meta ID: {user_phone}]" if nombre_cliente and nombre_cliente.strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na"] else f"{real_phone} [Meta ID: {user_phone}]"
-    elif is_meta and not real_phone:
-        cliente_str = f"⚠️ [Sin número real] Meta ID: {user_phone}" if not nombre_cliente or nombre_cliente.strip().lower() in ["", "no especificado", "no aplica", "n/a", "na"] else f"{nombre_cliente.strip()} ⚠️ [Sin número real] (Meta ID: {user_phone})"
-    elif nombre_cliente and nombre_cliente.strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
-        cliente_str = f"{nombre_cliente.strip()} ({display_phone})"
+    phone_info = resolve_order_phones(
+        api_linea_wa=user_phone,
+        provided_phone=telefono_cliente,
+        nombre_cliente=nombre_cliente
+    )
+    is_meta = phone_info["is_meta"]
+    display_phone = phone_info["display_phone"]
+    assigned_phone = phone_info["assigned_phone"]
+    cliente_str = phone_info["cliente_str"]
+    real_phone = phone_info["extracted_phone"] if is_meta else ""
 
     # --- Lógica de deduplicación unificada con main.py ---
     # Usar el teléfono como order_id base para evitar duplicados entre las dos rutas
@@ -203,8 +200,9 @@ def enviar_notificacion_tool(
             matches_user = (
                 odata.get("phone") == user_phone 
                 or odata.get("phone") == display_phone 
+                or odata.get("phone") == assigned_phone
                 or odata.get("meta_identifier") == user_phone
-                or (real_phone and odata.get("extracted_phone") == real_phone)
+                or (phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
             )
             if matches_user and odata.get("status") != "Despachados":
                 order_ts = odata.get("timestamp", 0)
@@ -257,9 +255,9 @@ def enviar_notificacion_tool(
             orders_data[existing_order_id]["total_a_cobrar"] = total_a_cobrar
             orders_data[existing_order_id]["direccion"] = direccion_envio
             orders_data[existing_order_id]["metodo_pago"] = metodo_pago
-            if real_phone:
-                orders_data[existing_order_id]["phone"] = real_phone
-                orders_data[existing_order_id]["extracted_phone"] = real_phone
+            orders_data[existing_order_id]["phone"] = assigned_phone
+            if phone_info["extracted_phone"]:
+                orders_data[existing_order_id]["extracted_phone"] = phone_info["extracted_phone"]
             if is_meta:
                 orders_data[existing_order_id]["meta_identifier"] = user_phone
             if nombre_cliente and nombre_cliente.strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
@@ -277,7 +275,7 @@ def enviar_notificacion_tool(
 
             orders_data[order_id] = {
                 "id": order_id,
-                "phone": real_phone if real_phone else user_phone,
+                "phone": assigned_phone,
                 "meta_identifier": user_phone if is_meta else None,
                 "summary": resumen_general,
                 "pedido": lista_productos,
@@ -290,7 +288,7 @@ def enviar_notificacion_tool(
                 "static_duration": 0,
                 "history": [{"status": "Recientes", "timestamp": order_timestamp}],
                 "origen": "tool_langgraph",
-                "extracted_phone": real_phone or (telefono_cliente.strip() if telefono_cliente else None),
+                "extracted_phone": phone_info["extracted_phone"],
                 "extracted_name": nombre_cliente
             }
             print(f"[tools/enviar_notificacion/{user_phone}] Nuevo pedido guardado en dashboard (ID: {order_id}).")
@@ -335,10 +333,7 @@ def enviar_notificacion_tool(
     send_url = f"{clean_server_url}/chats/send?id={notification_userbot}"
     headers = {"Content-Type": "application/json", "x-access-token": token}
     
-    if is_meta and not real_phone:
-        link_message_text = f"⚠️ Contacto Meta / Anónimo: {user_phone}\n🚨 ATENCIÓN: El cliente NO proporcionó un número celular real. Se requiere contactarlo por chat de la plataforma."
-    else:
-        link_message_text = f"https://wa.me/{display_phone}"
+    link_message_text = phone_info["link_message_text"]
     
     header_title = "🛍️ *NUEVO PEDIDO* 🛍️"
     if is_modification:

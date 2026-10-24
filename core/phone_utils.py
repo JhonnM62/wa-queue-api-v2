@@ -83,6 +83,129 @@ def clean_real_phone(raw_phone: Optional[str]) -> str:
     return ""
 
 
+def extract_provided_phone(raw_phone: Optional[str]) -> str:
+    """
+    Extrae y limpia el número telefónico proporcionado por el cliente en el chat.
+    Si el formato es estándar colombiano/ecuatoriano, lo normaliza con clean_real_phone.
+    Si el cliente lo digitó con error leve (menos o más dígitos, sin código de país, etc.),
+    confía en lo que digitó extrayendo los dígitos limpios en lugar de descartarlo.
+    Retorna "" si está vacío o no contiene al menos 7 dígitos.
+    """
+    if not raw_phone:
+        return ""
+    raw = str(raw_phone).strip()
+    if raw.lower() in ["", "no especificado", "no aplica", "n/a", "na", "ninguno", "null", "none"]:
+        return ""
+
+    # 1. Intentar normalización estándar (ej. 3123456789 -> 573123456789)
+    cleaned = clean_real_phone(raw)
+    if cleaned:
+        return cleaned
+
+    # 2. Confiamos en el número que el cliente proporcionó:
+    digits = re.sub(r'\D', '', raw)
+    if len(digits) >= 7:
+        if len(digits) == 10 and digits.startswith("3"):
+            return "57" + digits
+        return digits
+
+    return ""
+
+
+def resolve_order_phones(
+    api_linea_wa: Optional[str],
+    provided_phone: Optional[str],
+    nombre_cliente: Optional[str] = None
+) -> dict:
+    """
+    Resuelve la asignación del teléfono y presentación según la regla de negocio:
+
+    1. Contactos SIN Meta ID (vienen desde un número normal de WhatsApp):
+       - Se toma SIEMPRE el número que viene desde la API (api_linea_wa).
+       - NO se sobreescribe con lo que el cliente haya escrito en el chat para evitar
+         errores si el cliente lo digitó mal.
+       - assigned_phone = api_linea_wa
+       - display_phone = api_linea_wa
+       - meta_identifier = None
+       - extracted_phone = lo que escribió el cliente (solo para registro/auditoría)
+       - has_real_phone = True
+
+    2. Contactos CON Meta ID (LID, ManyChat, @username, etc.):
+       - No existe número celular en la API (api_linea_wa es el identificador de Meta).
+       - Se toma el número que proporciona el cliente (provided_phone).
+       - Se confía en el número proporcionado (esté bien o mal digitado).
+       - Si el cliente dio un número:
+           assigned_phone = provided_phone limpio
+           display_phone = provided_phone limpio
+           meta_identifier = api_linea_wa
+           has_real_phone = True
+       - Si el cliente NO dio número:
+           assigned_phone = api_linea_wa (fallback)
+           display_phone = api_linea_wa
+           meta_identifier = api_linea_wa
+           has_real_phone = False
+    """
+    raw_api = str(api_linea_wa or "").strip()
+    is_meta = is_meta_identifier(raw_api)
+    extracted_clean = extract_provided_phone(provided_phone) if provided_phone else ""
+
+    nombre_clean = ""
+    if nombre_cliente and str(nombre_cliente).strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na", "null", "none"]:
+        nombre_clean = str(nombre_cliente).strip()
+
+    if is_meta:
+        # Contacto CON Meta ID:
+        # Se toma el número proporcionado por el cliente
+        if extracted_clean:
+            assigned_phone = extracted_clean
+            display_phone = extracted_clean
+            has_real_phone = True
+            if nombre_clean:
+                cliente_str = f"{nombre_clean} ({display_phone}) [Meta ID: {raw_api}]"
+            else:
+                cliente_str = f"{display_phone} [Meta ID: {raw_api}]"
+            link_message_text = f"https://wa.me/{display_phone}"
+        else:
+            # No proporcionó número real aún
+            assigned_phone = raw_api
+            display_phone = raw_api
+            has_real_phone = False
+            if nombre_clean:
+                cliente_str = f"{nombre_clean} ⚠️ [Sin número real] (Meta ID: {raw_api})"
+            else:
+                cliente_str = f"⚠️ [Sin número real] Meta ID: {raw_api}"
+            link_message_text = (
+                f"⚠️ Contacto Meta / Anónimo: {raw_api}\n"
+                f"🚨 ATENCIÓN: El cliente NO proporcionó un número celular real. Se requiere contactarlo por chat de la plataforma."
+            )
+
+        meta_identifier = raw_api
+    else:
+        # Contacto SIN Meta ID:
+        # Se toma SIEMPRE el número que viene desde la API.
+        # No se le asigna lo que digitó el cliente para evitar errores si lo escribió mal.
+        assigned_phone = raw_api
+        display_phone = raw_api
+        has_real_phone = True
+        meta_identifier = None
+        if nombre_clean:
+            cliente_str = f"{nombre_clean} ({display_phone})"
+        else:
+            cliente_str = display_phone
+        link_message_text = f"https://wa.me/{display_phone}"
+
+    return {
+        "is_meta": is_meta,
+        "assigned_phone": assigned_phone,
+        "display_phone": display_phone,
+        "meta_identifier": meta_identifier,
+        "extracted_phone": extracted_clean or (str(provided_phone).strip() if provided_phone else None),
+        "has_real_phone": has_real_phone,
+        "cliente_str": cliente_str,
+        "link_message_text": link_message_text
+    }
+
+
 def get_meta_directive_prompt(identifier: str) -> str:
     """
     Genera la directiva prioritaria e ineludible para el prompt del agente cuando
