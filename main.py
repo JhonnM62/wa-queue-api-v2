@@ -28,7 +28,15 @@ from prompt_config import (
     EXAMPLE_JSON_STRUCTURE,
     get_prompt_template
 )
-from core.phone_utils import is_meta_identifier, clean_real_phone, get_meta_directive_prompt, resolve_order_phones
+from core.phone_utils import (
+    is_meta_identifier,
+    clean_real_phone,
+    get_meta_directive_prompt,
+    resolve_order_phones,
+    format_detalle_wa,
+    format_money,
+    canonical_order_signature,
+)
 
 # Cargar variables de entorno del archivo .env
 load_dotenv()
@@ -2194,7 +2202,7 @@ async def extract_order_info_with_ai(userbot: str, phone: str, apikey: str, mode
     {
       "resumen": "Resumen breve de la conversación",
       "pedido": "Breve resumen de lo pedido",
-      "detalle_completo": "Lista EXACTA y completa de todos los productos pedidos con sus respectivos precios, tal cual como el chatbot se lo detalló al cliente",
+      "detalle_completo": "Lista concisa de los productos pedidos, UNA SOLA LÍNEA por producto con el formato '1x Nombre del producto - $Subtotal' (ej. '1x Smirnoff de Lulo 12oz - $13.000\\n2x Forloko Gold 16oz - $30.000'). PROHIBIDO incluir líneas separadas de Precio Unidad, Subtotal o Total sin domicilio.",
       "total_a_cobrar": "Valor numérico o en texto del total de los productos SIN sumar el valor del domicilio (ej. $35.000)",
       "direccion": "Dirección de entrega especificada (o 'No especificada')",
       "metodo_pago": "Método de pago (ej. 'Efectivo', 'Transferencia', o 'No especificado')",
@@ -2395,13 +2403,54 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                 )
             )
 
+            notif_cache_key = f"{current_task_req_info.userbot}_{current_task_req_info.lineaWA}"
+            if notif_tool_already_ran:
+                notification_state_cache[notif_cache_key] = {
+                    "last_state": estado_conversacion_ai,
+                    "timestamp": time.time()
+                }
+
             should_run_notification_logic = False
             if current_task_req_info.activarnotificacion and current_task_req_info.lineaogruponotificacion and estado_matches:
                 if notification_system_mode != "tool":
                     should_run_notification_logic = True
                 elif not notif_tool_already_ran:
-                    print(f"{log_prefix} ⚠️ [NOTIF-FALLBACK] Modo tool activo pero Gemini no ejecutó enviar_notificacion_tool en estado '{estado_conversacion_ai}'. Disparando notificación fallback al grupo/línea.", flush=True)
-                    should_run_notification_logic = True
+                    # Antes de disparar el fallback, verificar si este cliente YA tiene un pedido activo reciente
+                    # (creado por enviar_notificacion_tool en un turno anterior, y este turno es solo "gracias"/comprobante).
+                    has_recent_active_order = False
+                    recent_order_id_found = None
+                    try:
+                        if os.path.exists(ORDERS_FILE_PATH):
+                            with open(ORDERS_FILE_PATH, 'r', encoding='utf-8') as _f_ord:
+                                _ords = json.load(_f_ord)
+                            _now_ms = int(time.time() * 1000)
+                            _check_info = resolve_order_phones(current_task_req_info.lineaWA, "")
+                            for _oid, _odata in _ords.items():
+                                if not isinstance(_odata, dict):
+                                    continue
+                                _matches = (
+                                    _odata.get("phone") == current_task_req_info.lineaWA
+                                    or _odata.get("phone") == _check_info["assigned_phone"]
+                                    or _odata.get("meta_identifier") == current_task_req_info.lineaWA
+                                )
+                                if _matches and _odata.get("status") != "Despachados":
+                                    _ots = _odata.get("timestamp", 0)
+                                    if _ots and (_now_ms - _ots < 60 * 60 * 1000):
+                                        has_recent_active_order = True
+                                        recent_order_id_found = _oid
+                                        break
+                    except Exception:
+                        pass
+
+                    if has_recent_active_order:
+                        print(
+                            f"{log_prefix} ℹ️ [NOTIF-CHECK] El contacto ya tiene un pedido activo reciente ({recent_order_id_found}). "
+                            f"No se dispara [NOTIF-FALLBACK] en este mensaje de seguimiento para evitar falso 'PEDIDO MODIFICADO'.",
+                            flush=True
+                        )
+                    else:
+                        print(f"{log_prefix} ⚠️ [NOTIF-FALLBACK] Modo tool activo pero Gemini no ejecutó enviar_notificacion_tool en estado '{estado_conversacion_ai}'. Disparando notificación fallback al grupo/línea.", flush=True)
+                        should_run_notification_logic = True
 
             print(
                 f"{log_prefix} 🔍 [NOTIF-CHECK] Verificando notificación:\n"
@@ -2418,7 +2467,6 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
 
             if should_run_notification_logic:
                 # --- Lógica de control de duplicados ---
-                notif_cache_key = f"{current_task_req_info.userbot}_{current_task_req_info.lineaWA}"
                 current_ts = time.time()
                 should_notify = True
 
@@ -2467,36 +2515,9 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
 
                                 order_timestamp = int(time.time() * 1000)
                                 
-                                # Formatear lista_productos con emoji 👉 para consistencia visual
-                                def format_detalle_wa(texto: str) -> str:
-                                    if not texto:
-                                        return texto
-                                        
-                                    import re
-                                    # Separar por comas si el siguiente elemento parece ser un producto (ej. "1 x ", "2x")
-                                    texto = re.sub(r',\s*(?=\d+\s*[xX]\s)', '\n', texto)
-                                    
-                                    # También separar si es simplemente una lista separada por comas en una sola línea
-                                    if '\n' not in texto and ',' in texto:
-                                        texto = texto.replace(',', '\n')
-                                        
-                                    lineas = texto.strip().split('\n')
-                                    resultado = []
-                                    for linea in lineas:
-                                        linea_strip = linea.strip()
-                                        # Quitar guiones o comas iniciales/finales
-                                        linea_strip = linea_strip.lstrip('-•, ').rstrip(', ')
-                                        if not linea_strip:
-                                            continue
-                                            
-                                        if not linea_strip.startswith('👉'):
-                                            linea_strip = f"👉 {linea_strip}"
-                                            
-                                        resultado.append(linea_strip)
-                                    return '\n'.join(resultado)
-                                
                                 detalle_completo_fmt = format_detalle_wa(order_info.get("detalle_completo", ""))
                                 order_info["detalle_completo"] = detalle_completo_fmt
+                                order_info["total_a_cobrar"] = format_money(order_info.get("total_a_cobrar", ""))
 
                                 telefono_extraido = order_info.get("telefono", "").strip()
                                 nombre_extraido = order_info.get("nombre_cliente", "No especificado").strip()
@@ -2512,11 +2533,18 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 cliente_str = phone_info["cliente_str"]
                                 real_phone = phone_info["extracted_phone"] if is_meta else ""
 
+                                ACTIVE_MODIFICATION_WINDOW_MS = 45 * 60 * 1000
                                 is_modification = False
                                 existing_order_id = None
-                                today = datetime.now(dt_timezone.utc).date()
                                 
-                                for oid, odata in orders_data.items():
+                                sorted_orders = sorted(
+                                    orders_data.items(),
+                                    key=lambda kv: kv[1].get("timestamp", 0) if isinstance(kv[1], dict) else 0,
+                                    reverse=True
+                                )
+                                for oid, odata in sorted_orders:
+                                    if not isinstance(odata, dict):
+                                        continue
                                     matches_user = (
                                         odata.get("phone") == current_task_req_info.lineaWA
                                         or odata.get("phone") == display_phone
@@ -2524,39 +2552,29 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         or odata.get("meta_identifier") == current_task_req_info.lineaWA
                                         or (is_meta and phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
                                     )
-                                    if matches_user and odata.get("status") != "Despachados":
+                                    if matches_user and odata.get("status") == "Recientes":
                                         order_ts = odata.get("timestamp", 0)
-                                        if order_ts:
-                                            # FIX: Usar diferencia de tiempo (12 horas) en lugar de fecha UTC para evitar bug a las 7:00 PM (hora Colombia)
-                                            if order_timestamp - order_ts < 12 * 3600 * 1000:
-                                                is_modification = True
-                                                existing_order_id = oid
-                                                break
+                                        if order_ts and (order_timestamp - order_ts < ACTIVE_MODIFICATION_WINDOW_MS):
+                                            is_modification = True
+                                            existing_order_id = oid
+                                            break
                                 
                                 order_id = existing_order_id if existing_order_id else f"ORDER_{int(time.time())}_{display_phone[-4:]}"
 
-                                # --- NUEVO: Control estricto de duplicados por contenido del pedido ---
+                                # --- Control estricto de duplicados por firma canónica del pedido ---
                                 is_exact_duplicate = False
                                 if is_modification and existing_order_id:
                                     existing_order = orders_data[existing_order_id]
-                                    # Solo comparar si el pedido existente tiene menos de 12 horas
-                                    if order_timestamp - existing_order.get("timestamp", 0) < 12 * 3600 * 1000:
-                                        def clean_str(t):
-                                            if not t:
-                                                return ""
-                                            return "".join(c.lower() for c in str(t) if c.isalnum())
-
-                                        existing_det = clean_str(
-                                            existing_order.get("detalle_completo", ""))
-                                        existing_tot = clean_str(
-                                            existing_order.get("total_a_cobrar", ""))
-                                        new_det = clean_str(
-                                            order_info.get("detalle_completo", ""))
-                                        new_tot = clean_str(
-                                            order_info.get("total_a_cobrar", ""))
-
-                                        if existing_det == new_det and existing_tot == new_tot:
-                                            is_exact_duplicate = True
+                                    old_sig = canonical_order_signature(
+                                        existing_order.get("detalle_completo", ""),
+                                        existing_order.get("total_a_cobrar", "")
+                                    )
+                                    new_sig = canonical_order_signature(
+                                        order_info.get("detalle_completo", ""),
+                                        order_info.get("total_a_cobrar", "")
+                                    )
+                                    if old_sig == new_sig:
+                                        is_exact_duplicate = True
 
                                 if is_exact_duplicate:
                                     print(
@@ -2570,11 +2588,11 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     }
 
                                     if is_modification and existing_order_id:
-                                        # Es un pedido duplicado/reciente del mismo cliente ANTES de ser despachado. Actualizamos info pero mantenemos el historial/reloj.
+                                        # Es un pedido modificado reciente del mismo cliente en estado Recientes.
                                         orders_data[order_id]["summary"] = order_info.get(
                                             "resumen", "")
                                         orders_data[order_id]["pedido"] = order_info.get(
-                                            "pedido", "")
+                                            "detalle_completo", "")
                                         orders_data[order_id]["detalle_completo"] = order_info.get(
                                             "detalle_completo", "")
                                         orders_data[order_id]["total_a_cobrar"] = order_info.get(
@@ -2601,7 +2619,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                             "phone": assigned_phone,
                                             "meta_identifier": current_task_req_info.lineaWA if is_meta else None,
                                             "summary": order_info.get("resumen", ""),
-                                            "pedido": order_info.get("pedido", ""),
+                                            "pedido": order_info.get("detalle_completo", ""),
                                             "detalle_completo": order_info.get("detalle_completo", ""),
                                             "total_a_cobrar": order_info.get("total_a_cobrar", ""),
                                             "direccion": order_info.get("direccion", ""),
@@ -2652,16 +2670,16 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     except Exception as _pos_err:
                                         print(f"{log_prefix} Error despachando POS webhook en fallback: {_pos_err}", flush=True)
 
-                                    # Cabecera dinámica según si es nuevo o modificado
-                                    header_title = "🚨 *NUEVO PEDIDO* 🚨"
+                                    # Cabecera dinámica unificada según si es nuevo o modificado
+                                    header_title = "🛍️ *NUEVO PEDIDO* 🛍️"
                                     if is_modification:
-                                        header_title = "⚠️ *PEDIDO MODIFICADO* ⚠️"
+                                        header_title = "🔄 *PEDIDO MODIFICADO* 🔄"
 
                                     notification_text = (
                                         f"{header_title}\n\n"
-                                        f"📱 *Cliente:* {cliente_str}\n\n"
+                                        f"👤 *Cliente:* {cliente_str}\n\n"
                                         f"📝 *Detalle del Pedido:*\n{order_info.get('detalle_completo', 'No especificado')}\n\n"
-                                        f"💰 *Total a Cobrar:* {order_info.get('total_a_cobrar', 'No especificado')}\n"
+                                        f"💵 *Total a Cobrar:* {order_info.get('total_a_cobrar', 'No especificado')}\n"
                                         f"💳 *Método de Pago:* {order_info.get('metodo_pago', 'No especificado')}\n"
                                         f"📍 *Dirección de Entrega:* {order_info.get('direccion', 'No especificada')}\n\n"
                                         f"🤖 *Resumen IA:* {order_info.get('resumen', '')}"
@@ -3110,7 +3128,15 @@ async def get_orders():
     if os.path.exists(ORDERS_FILE_PATH):
         try:
             with open(ORDERS_FILE_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, dict):
+                for _oid, _ord in data.items():
+                    if isinstance(_ord, dict):
+                        if _ord.get("detalle_completo"):
+                            _ord["detalle_completo"] = format_detalle_wa(_ord["detalle_completo"])
+                        if _ord.get("pedido"):
+                            _ord["pedido"] = format_detalle_wa(_ord["pedido"])
+            return data
         except Exception:
             return {}
     return {}

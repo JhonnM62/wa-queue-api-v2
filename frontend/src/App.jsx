@@ -219,16 +219,23 @@ function BotModal({ bot, onClose, onSave, toast }) {
 
         {/* ── ID + Lookup ─────────────────────────────────── */}
         <div style={{ marginBottom: '20px' }}>
-          <Field label="ID DEL USERBOT" hint="(el valor que envías en req.userbot)">
+          <Field label="ID DEL USERBOT" hint="(el valor que envías en req.userbot — puedes actualizarlo si creaste una nueva sesión)">
             <div style={{ display: 'flex', gap: '8px' }}>
               <input
                 id="bot-identifier"
                 type="text"
-                placeholder="ej: mi_bot_ventas_01"
+                placeholder="ej: 6a8cc935a19dcc8a8272ebb1"
                 value={form.userbot_identifier}
-                onChange={e => { set('userbot_identifier', e.target.value); setLookupDone(false); }}
-                disabled={!!bot}
-                style={bot ? { opacity: 0.5, cursor: 'not-allowed', flex: 1 } : { flex: 1 }}
+                onChange={e => {
+                  const newVal = e.target.value;
+                  setForm(f => ({
+                    ...f,
+                    userbot_identifier: newVal,
+                    ...(bot && f.userbotopcional === f.userbot_identifier ? { userbotopcional: newVal } : {})
+                  }));
+                  setLookupDone(false);
+                }}
+                style={{ flex: 1 }}
               />
               {!bot && (
                 <button
@@ -242,6 +249,11 @@ function BotModal({ bot, onClose, onSave, toast }) {
                 </button>
               )}
             </div>
+            {bot && form.userbot_identifier.trim() && form.userbot_identifier.trim() !== bot.userbot_identifier && (
+              <p style={{ fontSize: '12px', color: '#38bdf8', marginTop: '6px', marginBottom: 0 }}>
+                🔄 Se actualizará la sesión de <code>{bot.userbot_identifier}</code> a <code>{form.userbot_identifier.trim()}</code> conservando todo tu RAG (catálogo), prompt, webhooks e historial.
+              </p>
+            )}
             {lookupDone && !bot && (
               <p style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', marginBottom: 0 }}>
                 Si el ID ya existe en la BD, los campos se autocompletarán.

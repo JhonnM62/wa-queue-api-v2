@@ -76,6 +76,9 @@ def update_bot(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    import os
+    import shutil
+
     bot = db.query(models.BotConfig).filter(models.BotConfig.id == bot_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
@@ -85,8 +88,80 @@ def update_bot(
     elif current_user.role != "admin" and bot.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough privileges")
 
-    for field, value in bot_update.model_dump(exclude_unset=True).items():
+    update_data = bot_update.model_dump(exclude_unset=True)
+    old_identifier = (bot.userbot_identifier or "").strip()
+    new_identifier = (update_data.get("userbot_identifier") or "").strip()
+
+    if "userbot_identifier" in update_data:
+        if not new_identifier:
+            raise HTTPException(status_code=400, detail="El ID del UserBot no puede estar vacío")
+        update_data["userbot_identifier"] = new_identifier
+
+    if new_identifier and new_identifier != old_identifier:
+        conflict_bot = db.query(models.BotConfig).filter(
+            models.BotConfig.userbot_identifier == new_identifier,
+            models.BotConfig.id != bot_id
+        ).first()
+        if conflict_bot:
+            if conflict_bot.user_id is None:
+                # Si se había autogenerado un registro huérfano por una petición previa de WhatsApp,
+                # rescatar su apikey si el actual no tenía y eliminar el huérfano para permitir el cambio de ID.
+                if conflict_bot.apikey and not bot.apikey and not update_data.get("apikey"):
+                    bot.apikey = conflict_bot.apikey
+                db.query(models.ConversationMessage).filter(
+                    models.ConversationMessage.bot_id == conflict_bot.id
+                ).update(
+                    {models.ConversationMessage.bot_id: bot.id},
+                    synchronize_session=False
+                )
+                db.delete(conflict_bot)
+                db.flush()
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El ID '{new_identifier}' ya está registrado en otro bot (#{conflict_bot.id}). Elimina ese otro bot primero si deseas usar este ID."
+                )
+
+        # Si userbotopcional tenía el mismo ID antiguo de sesión, actualizarlo también
+        if bot.userbotopcional == old_identifier:
+            if update_data.get("userbotopcional") in (None, "", old_identifier):
+                update_data["userbotopcional"] = new_identifier
+
+    for field, value in update_data.items():
         setattr(bot, field, value)
+
+    if new_identifier and new_identifier != old_identifier:
+        # Actualizar historial en SQLite al nuevo userbot_identifier
+        try:
+            db.query(models.ConversationMessage).filter(
+                (models.ConversationMessage.bot_id == bot.id) |
+                (models.ConversationMessage.userbot_identifier == old_identifier)
+            ).update(
+                {
+                    models.ConversationMessage.bot_id: bot.id,
+                    models.ConversationMessage.userbot_identifier: new_identifier
+                },
+                synchronize_session=False
+            )
+        except Exception as e_msg:
+            print(f"[bots/update_bot] Aviso actualizando ConversationMessage de '{old_identifier}' a '{new_identifier}': {e_msg}")
+
+        # Migrar carpetas de historial JSON y estado de pausa para no perder contexto de clientes activos
+        for subdir in ("historial", "paused_status"):
+            old_dir = os.path.join("./Download/AutoSystem", subdir, old_identifier)
+            new_dir = os.path.join("./Download/AutoSystem", subdir, new_identifier)
+            if os.path.isdir(old_dir):
+                try:
+                    os.makedirs(new_dir, exist_ok=True)
+                    for fname in os.listdir(old_dir):
+                        src_path = os.path.join(old_dir, fname)
+                        dst_path = os.path.join(new_dir, fname)
+                        if os.path.isfile(src_path) and not os.path.exists(dst_path):
+                            shutil.move(src_path, dst_path)
+                except Exception as e_fs:
+                    print(f"[bots/update_bot] Aviso migrando {subdir} de '{old_identifier}' a '{new_identifier}': {e_fs}")
+
+        print(f"[bots/update_bot] 🔄 Bot #{bot.id} actualizado de userbot_identifier '{old_identifier}' -> '{new_identifier}'.")
 
     db.commit()
     db.refresh(bot)

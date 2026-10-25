@@ -1,7 +1,14 @@
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from services.rag_service import search_knowledge
-from core.phone_utils import is_meta_identifier, clean_real_phone, resolve_order_phones
+from core.phone_utils import (
+    is_meta_identifier,
+    clean_real_phone,
+    resolve_order_phones,
+    format_detalle_wa,
+    format_money,
+    canonical_order_signature,
+)
 
 
 @tool
@@ -79,6 +86,11 @@ def enviar_notificacion_tool(
     Úsala SOLO cuando se haya concretado un pedido final.
     Debes extraer de la conversación el resumen general, la lista de productos, el total a cobrar, la dirección, el método de pago, el teléfono de contacto del cliente (SOLO relevante cuando el remitente es un Meta ID largo; si el contacto ya viene con su número de WhatsApp normal, el sistema tomará automáticamente el número de la petición `lineaWA`), y el nombre del cliente (si lo dio, sino 'No especificado').
     
+    IMPORTANTE PARA LISTA DE PRODUCTOS (`lista_productos`):
+    Escribe UNA SOLA LÍNEA concisa por cada producto pedido con el formato: `[Cantidad]x [Nombre del Producto] - $[Subtotal del ítem]`
+    (Ejemplo: `1x Smirnoff de Lulo 12oz - $13.000\n2x Forloko Gold 16oz - $30.000`).
+    PROHIBIDO incluir líneas separadas de "Precio Unidad", "Subtotal" o "Total sin el valor del domicilio".
+
     IMPORTANTE PARA DIRECCIÓN: La 'direccion_envio' DEBE ser SIEMPRE únicamente la dirección física literal y explícita del cliente (NO incluyas el número de teléfono dentro del campo dirección). Si el cliente dice "la misma dirección de siempre" o la dirección ya se mencionó en el historial, DEBES buscarla en el contexto y escribirla completa. NUNCA escribas "N/A" o "Ya registrada" si la dirección es conocida o se puede deducir del historial.
     Solo si algún dato realmente no existe o no aplica bajo ninguna circunstancia, pasa una cadena vacía.
     """
@@ -131,44 +143,7 @@ def enviar_notificacion_tool(
     ORDERS_FILE_PATH = "./Download/AutoSystem/orders.json"
     order_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-    # Formatear lista_productos con emoji 👉 para consistencia visual con WhatsApp
-    def format_detalle_wa(texto: str) -> str:
-        if not texto:
-            return texto
-            
-        import re
-        # Separar por comas si el siguiente elemento parece ser un producto (ej. "1 x ", "2x")
-        texto = re.sub(r',\s*(?=\d+\s*[xX]\s)', '\n', texto)
-        
-        # También separar si es simplemente una lista separada por comas en una sola línea
-        if '\n' not in texto and ',' in texto:
-            texto = texto.replace(',', '\n')
-            
-        lineas = texto.strip().split('\n')
-        resultado = []
-        for linea in lineas:
-            linea_strip = linea.strip()
-            # Quitar guiones o comas iniciales/finales
-            linea_strip = linea_strip.lstrip('-•, ').rstrip(', ')
-            if not linea_strip:
-                continue
-                
-            if not linea_strip.startswith('👉'):
-                linea_strip = f"👉 {linea_strip}"
-                
-            resultado.append(linea_strip)
-        return '\n'.join(resultado)
-
-    def format_money(m_str: str) -> str:
-        if not m_str: return m_str
-        import re
-        # Busca 4 o más dígitos consecutivos y los formatea con separador de miles (punto)
-        return re.sub(r'\d{4,}', lambda m: f"{int(m.group(0)):,}".replace(",", "."), str(m_str))
-
     detalle_completo = format_detalle_wa(lista_productos)
-    # Formatear números grandes con puntos de mil en el detalle
-    detalle_completo = format_money(detalle_completo)
-    
     total_a_cobrar = format_money(total_a_cobrar)
 
     phone_info = resolve_order_phones(
@@ -198,8 +173,10 @@ def enviar_notificacion_tool(
             if resumen_general and typed_digits in resumen_general:
                 resumen_general = resumen_general.replace(typed_digits, real_local)
 
-    # --- Lógica de deduplicación unificada con main.py ---
-    # Usar el teléfono como order_id base para evitar duplicados entre las dos rutas
+    # --- Lógica de deduplicación y detección de modificaciones ---
+    # Solo se considera modificación si existe un pedido aún en "Recientes" (no despachado ni en proceso)
+    # dentro de una ventana corta de sesión activa (45 minutos) y el cliente cambió productos, total o dirección.
+    ACTIVE_MODIFICATION_WINDOW_MS = 45 * 60 * 1000
     is_modification = False
     existing_order_id = None
 
@@ -211,8 +188,15 @@ def enviar_notificacion_tool(
                 if content.strip():
                     orders_data = json.loads(content)
 
-        # Buscar pedido activo del mismo teléfono en las últimas 12 horas (cualquier status excepto Despachados)
-        for oid, odata in orders_data.items():
+        # Recorrer del pedido más reciente al más antiguo
+        sorted_orders = sorted(
+            orders_data.items(),
+            key=lambda kv: kv[1].get("timestamp", 0) if isinstance(kv[1], dict) else 0,
+            reverse=True
+        )
+        for oid, odata in sorted_orders:
+            if not isinstance(odata, dict):
+                continue
             matches_user = (
                 odata.get("phone") == user_phone 
                 or odata.get("phone") == display_phone 
@@ -220,53 +204,51 @@ def enviar_notificacion_tool(
                 or odata.get("meta_identifier") == user_phone
                 or (is_meta and phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
             )
-            if matches_user and odata.get("status") != "Despachados":
+            if matches_user and odata.get("status") == "Recientes":
                 order_ts = odata.get("timestamp", 0)
-                if order_ts:
-                    # Usar diferencia de tiempo (12 horas) en lugar de fecha UTC para evitar bug a las 7:00 PM (hora Colombia)
-                    if order_timestamp - order_ts < 12 * 3600 * 1000:
-                        is_modification = True
-                        existing_order_id = oid
-                        break
+                if order_ts and (order_timestamp - order_ts < ACTIVE_MODIFICATION_WINDOW_MS):
+                    is_modification = True
+                    existing_order_id = oid
+                    break
 
         is_exact_duplicate = False
         if is_modification and existing_order_id:
             existing_order = orders_data[existing_order_id]
-            
-            # Comprobar si el pedido es idéntico al anterior para evitar spam ANTES de modificarlo
-            if order_timestamp - existing_order.get("timestamp", 0) < 12 * 3600 * 1000:
-                def clean_str(t):
-                    if not t: return ""
-                    return "".join(c.lower() for c in str(t) if c.isalnum())
-                
-                old_det = clean_str(existing_order.get("detalle_completo", ""))
-                new_det = clean_str(detalle_completo)
-                old_tot = clean_str(existing_order.get("total_a_cobrar", ""))
-                new_tot = clean_str(total_a_cobrar)
-                
-                # Solo omitir si el detalle y total son iguales Y ya se envió a WhatsApp recientemente (menos de 5 min)
-                last_wa_ts = existing_order.get("wa_notified_timestamp", 0)
-                sec_since_notif = (order_timestamp - last_wa_ts) / 1000 if last_wa_ts else 999999
-                if old_det == new_det and old_tot == new_tot and last_wa_ts and sec_since_notif < 300:
-                    is_exact_duplicate = True
+
+            texto_lower = (lista_productos or "").lower()
+            is_generic_summary = "historial" in texto_lower or "productos por un total" in texto_lower
+
+            # Preservar dirección anterior si la nueva es "N.A." o vacía
+            old_addr = existing_order.get("direccion", "")
+            new_addr_lower = (direccion_envio or "").lower().strip()
+            if new_addr_lower in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"] or not new_addr_lower:
+                if old_addr and old_addr.lower() not in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"]:
+                    direccion_envio = old_addr
+
+            # Comparar firma canónica de productos + total + dirección
+            old_sig = canonical_order_signature(
+                existing_order.get("detalle_completo", ""),
+                existing_order.get("total_a_cobrar", "")
+            )
+            new_sig = canonical_order_signature(detalle_completo, total_a_cobrar)
+            old_addr_norm = "".join(c.lower() for c in str(old_addr) if c.isascii() and c.isalnum())
+            new_addr_norm = "".join(c.lower() for c in str(direccion_envio or "") if c.isascii() and c.isalnum())
+
+            same_items_and_total = is_generic_summary or (old_sig == new_sig)
+            same_address = (old_addr_norm == new_addr_norm) or not new_addr_norm
+            if same_items_and_total and same_address:
+                is_exact_duplicate = True
 
             # ACTUALIZAR in-place: preservar timestamp original, status e historial
             orders_data[existing_order_id]["summary"] = resumen_general
             
-            # Evitar que la IA sobrescriba el detalle con un resumen genérico al modificar el pago
-            texto_lower = lista_productos.lower()
-            is_generic_summary = "historial" in texto_lower or "productos por un total" in texto_lower
-            
             if not is_generic_summary:
-                orders_data[existing_order_id]["pedido"] = lista_productos
+                orders_data[existing_order_id]["pedido"] = detalle_completo
                 orders_data[existing_order_id]["detalle_completo"] = detalle_completo
-                
-            # Preservar dirección anterior si la nueva es "N.A." o vacía
-            old_addr = existing_order.get("direccion", "")
-            new_addr_lower = direccion_envio.lower().strip()
-            if new_addr_lower in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"] or not new_addr_lower:
-                if old_addr and old_addr.lower() not in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"]:
-                    direccion_envio = old_addr
+            else:
+                orders_data[existing_order_id]["detalle_completo"] = format_detalle_wa(
+                    orders_data[existing_order_id].get("detalle_completo", "")
+                )
 
             orders_data[existing_order_id]["total_a_cobrar"] = total_a_cobrar
             orders_data[existing_order_id]["direccion"] = direccion_envio
@@ -286,7 +268,7 @@ def enviar_notificacion_tool(
             if is_generic_summary:
                 detalle_completo = orders_data[existing_order_id].get("detalle_completo", detalle_completo)
                 
-            print(f"[tools/enviar_notificacion/{user_phone}] Pedido actualizado en dashboard (ID: {order_id}). Sin duplicado.")
+            print(f"[tools/enviar_notificacion/{user_phone}] Pedido actualizado en dashboard (ID: {order_id}, is_exact_duplicate={is_exact_duplicate}).")
         else:
             # Pedido nuevo — usar prefijo ORDER_ original
             order_id = f"ORDER_{int(time.time())}_{display_phone[-4:]}"

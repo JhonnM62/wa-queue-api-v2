@@ -59,6 +59,7 @@ class BotConfigCreate(BotConfigBase):
     pass
 
 class BotConfigUpdate(BaseModel):
+    userbot_identifier: Optional[str] = None
     apikey: Optional[str] = None
     system_prompt: Optional[str] = None
     ai_model: Optional[str] = None

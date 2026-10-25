@@ -113,7 +113,9 @@ def call_model(state: AgentState):
             "⚠️ REGLA OBLIGATORIA DE NOTIFICACIÓN DE PEDIDO (`enviar_notificacion_tool`):\n"
             "Cuando el cliente confirme o cierre su pedido (productos elegidos, total, método de pago y dirección de entrega acordados), "
             "DEBES invocar la herramienta `enviar_notificacion_tool` ANTES de emitir tu respuesta final en JSON. "
-            "Esto notifica de inmediato al grupo/vendedor y registra la venta en el sistema.\n\n"
+            "En `lista_productos` escribe UNA SOLA LÍNEA concisa por cada producto (`1x Nombre del producto - $Subtotal`), "
+            "SIN repetir líneas separadas de 'Precio Unidad', 'Subtotal' ni 'Total sin el valor del domicilio'. "
+            "Si el pedido ya fue confirmado y notificado y el cliente solo responde con un agradecimiento ('gracias', 'listo', 'ok') sin cambiar productos ni dirección, NO vuelvas a invocar la herramienta.\n\n"
         )
         
     # Añadir herramientas nativas de Google (Search, Maps) si están habilitadas

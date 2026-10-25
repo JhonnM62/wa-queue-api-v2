@@ -243,3 +243,143 @@ def get_meta_directive_prompt(identifier: str) -> str:
         "4. En la herramienta `enviar_notificacion_tool`, envía en el campo `telefono_cliente` el número celular real que el cliente escribió.\n"
         "============================================================\n"
     )
+
+
+def format_money(m_str: str) -> str:
+    """Formatea números de 4 o más dígitos consecutivos con punto de miles (ej. 13000 -> 13.000)."""
+    if not m_str:
+        return m_str
+    return re.sub(r'\b\d{4,}\b', lambda m: f"{int(m.group(0)):,}".replace(",", "."), str(m_str))
+
+
+def format_detalle_wa(texto: str) -> str:
+    """
+    Limpia y compacta el detalle del pedido para WhatsApp y el Dashboard:
+    - Deja UNA SOLA LÍNEA concisa por cada producto pedido (ej. '👉 1x Smirnoff de Lulo 12oz 🍸 - $13.000').
+    - Elimina líneas redundantes de 'Precio Unidad', 'Subtotal' y 'Total sin el valor del domicilio'.
+    - Si el precio estaba en las líneas 'Subtotal' o 'Precio Unidad' debajo del producto,
+      integra el subtotal del ítem en la misma línea del producto.
+    """
+    if not texto:
+        return texto
+
+    raw = str(texto).replace("\r\n", "\n").replace("\\n", "\n").strip()
+
+    # Separar por comas si el siguiente elemento empieza con cantidad (ej. ", 1 x ", ", 2x ")
+    raw = re.sub(r',\s*(?=\d+\s*(?:[xX]|\bpor\b)\s)', '\n', raw, flags=re.IGNORECASE)
+
+    # Si todo viene en una sola línea separada por comas (y no son comas de miles como 13,000)
+    if '\n' not in raw and ',' in raw:
+        raw = re.sub(r',\s*(?!\d{3}\b)', '\n', raw)
+
+    lineas = raw.split('\n')
+    items = []
+
+    for linea in lineas:
+        # Quitar viñetas, guiones, 👉 iniciales y comas/espacios extremos
+        linea_strip = re.sub(r'^[\s👉•\-\*,]+', '', linea).strip().rstrip(',').strip()
+        if not linea_strip:
+            continue
+
+        # Texto sin emojis iniciales para evaluar patrones de etiquetas redundantes
+        clean_for_match = re.sub(r'^[^\w\$]+', '', linea_strip).strip()
+        if not clean_for_match:
+            continue
+
+        # 1. Descartar encabezados genéricos o líneas de Total / Domicilio global
+        if re.match(
+            r'^(?:detalle\s+del\s+pedido|lista\s+de\s+productos|productos|pedido|resumen(?:\s+del\s+pedido)?)\s*:?\s*$',
+            clean_for_match,
+            flags=re.IGNORECASE
+        ):
+            continue
+
+        if re.match(
+            r'^(?:total\b|sub\s*-?\s*total\s+(?:de\s+los\s+productos|general|del\s+pedido|sin\b)|valor\s+(?:del\s+)?domicilio|costo\s+(?:del\s+)?(?:domicilio|env[ií]o)|domicilio\s*:)',
+            clean_for_match,
+            flags=re.IGNORECASE
+        ):
+            continue
+
+        # 2. Detectar línea suelta de "Precio Unidad: $13.000" / "Valor unitario: $13.000"
+        m_unit = re.match(
+            r'^(?:precio|valor|costo)\s*(?:por\s*)?(?:unidad|unitario|c\/u|u\.?)\b[^\$0-9]*(\$?\s*[\d\.,]+)',
+            clean_for_match,
+            flags=re.IGNORECASE
+        )
+        if m_unit:
+            if items and not items[-1]["has_own_price"] and not items[-1]["subtotal_price"]:
+                items[-1]["unit_price"] = m_unit.group(1).strip()
+            continue
+
+        # 3. Detectar línea suelta de "Subtotal: $13.000" (subtotal del ítem actual)
+        m_sub = re.match(
+            r'^sub\s*-?\s*total\s*:?\s*(\$?\s*[\d\.,]+)\s*$',
+            clean_for_match,
+            flags=re.IGNORECASE
+        )
+        if m_sub:
+            if items and not items[-1]["has_own_price"]:
+                items[-1]["subtotal_price"] = m_sub.group(1).strip()
+            continue
+
+        # 4. Limpiar redundancias inline dentro de la misma línea de producto
+        linea_prod = re.sub(
+            r'[\s\-\|\/,;\(\)]*(?:precio|valor)\s*(?:por\s*)?(?:unidad|unitario|c\/u)\s*:?\s*\$?\s*[\d\.,]+[\s\-\|\/,;\(\)]*(?=sub\s*-?\s*total)',
+            ' ',
+            linea_strip,
+            flags=re.IGNORECASE
+        )
+        linea_prod = re.sub(
+            r'(?:sub\s*-?\s*total|(?:precio|valor)\s*(?:por\s*)?(?:unidad|unitario|c\/u))\s*:?\s*(\$?\s*[\d\.,]+)',
+            r'\1',
+            linea_prod,
+            flags=re.IGNORECASE
+        )
+        # Normalizar "1 X Producto" o "1 por Producto" -> "1x Producto"
+        linea_prod = re.sub(
+            r'^(\d+)\s*(?:[xX]|\bpor\b)\s*',
+            r'\1x ',
+            linea_prod.strip(),
+            flags=re.IGNORECASE
+        )
+        linea_prod = re.sub(r'\s{2,}', ' ', linea_prod).strip(' -|,;')
+
+        # Verificar si la línea del producto ya incluye un precio (ej. $13.000 o 13000)
+        has_own_price = bool(
+            re.search(r'\$\s*\d|\b\d{1,3}(?:\.\d{3})+\b|\b\d{4,}\b', linea_prod)
+        )
+
+        items.append({
+            "text": linea_prod,
+            "has_own_price": has_own_price,
+            "unit_price": None,
+            "subtotal_price": None
+        })
+
+    resultado = []
+    for item in items:
+        text = item["text"]
+        if not item["has_own_price"]:
+            chosen_price = item["subtotal_price"] or item["unit_price"]
+            if chosen_price:
+                p_clean = chosen_price.strip()
+                if not p_clean.startswith("$"):
+                    p_clean = f"${p_clean}"
+                text = f"{text} - {p_clean}"
+        text = format_money(text)
+        resultado.append(f"👉 {text}")
+
+    return '\n'.join(resultado)
+
+
+def canonical_order_signature(detalle: Optional[str], total: Optional[str]) -> tuple:
+    """
+    Devuelve una firma canónica (detalle_norm, total_digits) para comparar si dos pedidos
+    tienen exactamente los mismos productos y total, ignorando emojis o formatos redundantes.
+    """
+    det_compact = format_detalle_wa(detalle or "")
+    det_norm = "".join(c.lower() for c in det_compact if c.isascii() and c.isalnum())
+    tot_digits = re.sub(r'\D', '', str(total or ""))
+    return det_norm, tot_digits
+
