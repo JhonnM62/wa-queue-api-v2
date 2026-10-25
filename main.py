@@ -2522,7 +2522,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         or odata.get("phone") == display_phone
                                         or odata.get("phone") == assigned_phone
                                         or odata.get("meta_identifier") == current_task_req_info.lineaWA
-                                        or (phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
+                                        or (is_meta and phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
                                     )
                                     if matches_user and odata.get("status") != "Despachados":
                                         order_ts = odata.get("timestamp", 0)
@@ -2584,8 +2584,10 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         orders_data[order_id]["metodo_pago"] = order_info.get(
                                             "metodo_pago", "")
                                         orders_data[order_id]["phone"] = assigned_phone
-                                        if phone_info["extracted_phone"]:
+                                        if is_meta and phone_info["extracted_phone"]:
                                             orders_data[order_id]["extracted_phone"] = phone_info["extracted_phone"]
+                                        elif not is_meta:
+                                            orders_data[order_id]["extracted_phone"] = None
                                         if is_meta:
                                             orders_data[order_id]["meta_identifier"] = current_task_req_info.lineaWA
                                         if nombre_extraido and nombre_extraido.lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
@@ -3537,53 +3539,142 @@ async def dashboard():
             @keyframes slide-in { to { transform: translateX(0); } }
             @keyframes slide-out { to { transform: translateX(120%); opacity: 0; } }
 
+            .header-top {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.8rem;
+            }
+            .mobile-header-actions {
+                display: none;
+                align-items: center;
+                gap: 0.45rem;
+            }
+            .btn-toggle-filters {
+                background: rgba(59, 130, 246, 0.14);
+                border: 1px solid rgba(59, 130, 246, 0.35);
+                color: #93c5fd;
+                border-radius: 6px;
+                padding: 0.25rem 0.55rem;
+                font-family: 'Inter', sans-serif;
+                font-size: 0.72rem;
+                font-weight: 600;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.25rem;
+                white-space: nowrap;
+                transition: all 0.2s ease;
+            }
+            .btn-toggle-filters.active-filter {
+                background: rgba(16, 185, 129, 0.18);
+                border-color: rgba(16, 185, 129, 0.45);
+                color: #6ee7b7;
+            }
+
             /* Responsive Design */
             @media (max-width: 768px) {
                 header {
                     flex-direction: column;
                     align-items: stretch;
-                    gap: 0.8rem;
-                    padding: 0.8rem 1rem;
+                    gap: 0.35rem;
+                    padding: 0.45rem 0.7rem;
+                }
+                h1 {
+                    font-size: 0.95rem;
+                }
+                .mobile-header-actions {
+                    display: flex;
+                }
+                #last-updated {
+                    display: none;
+                }
+                #last-updated-mobile {
+                    font-size: 0.65rem;
+                    color: var(--text-muted);
+                    white-space: nowrap;
                 }
                 .header-controls {
                     width: 100%;
                     display: grid;
-                    grid-template-columns: 1fr;
-                    gap: 0.5rem;
+                    grid-template-columns: 1fr 122px;
+                    gap: 0.35rem;
+                }
+                .header-controls.mobile-collapsed {
+                    display: none !important;
                 }
                 .search-input {
+                    grid-column: 1 / -1;
                     min-width: unset;
                     width: 100%;
+                    height: 30px;
+                    padding: 0.22rem 0.6rem;
+                    font-size: 0.78rem;
                     box-sizing: border-box;
                 }
                 .filter-select {
                     width: 100%;
+                    height: 30px;
+                    padding: 0.18rem 0.4rem;
+                    font-size: 0.74rem;
                     box-sizing: border-box;
                 }
                 .date-picker {
                     width: 100%;
+                    height: 30px;
+                    padding: 0.18rem 0.35rem;
+                    font-size: 0.74rem;
                     box-sizing: border-box;
                 }
                 .tabs {
-                    padding: 0.8rem 1rem;
+                    padding: 0.2rem 0.5rem;
+                    gap: 0.15rem;
+                    justify-content: space-between;
+                }
+                .tab-btn {
+                    flex: 1;
+                    justify-content: center;
+                    padding: 0.38rem 0.25rem;
+                    font-size: 0.78rem;
+                    gap: 0.3rem;
+                }
+                .badge {
+                    padding: 0.05rem 0.38rem;
+                    font-size: 0.68rem;
                 }
                 .container {
-                    padding: 1rem;
-                    padding-bottom: 6rem; /* Margen extra para que el último botón no quede tapado por la interfaz del teléfono */
+                    padding: 0.65rem;
+                    padding-bottom: 5rem; /* Margen extra para que el último botón no quede tapado por la interfaz del teléfono */
                 }
                 .orders-grid {
                     grid-template-columns: 1fr;
-                    gap: 1rem;
+                    gap: 0.75rem;
                 }
                 .card {
-                    padding: 1rem;
+                    padding: 0.85rem;
                 }
                 .card-header {
-                    flex-direction: column;
-                    align-items: flex-start;
-                    gap: 0.8rem;
+                    flex-direction: row;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 0.4rem;
+                    margin-bottom: 0.65rem;
+                    padding-bottom: 0.4rem;
+                }
+                .phone-link {
+                    padding: 0.3rem 0.65rem;
+                    font-size: 0.78rem;
+                }
+                .total-box {
+                    padding: 0.55rem 0.75rem;
+                    margin: 0.65rem 0;
+                }
+                .total-amount {
+                    font-size: 1.05rem;
                 }
                 .detail-box {
+                    padding: 0.6rem;
+                    font-size: 0.8rem;
                     word-wrap: break-word;
                     word-break: break-word;
                 }
@@ -3592,14 +3683,20 @@ async def dashboard():
     </head>
     <body>
         <header>
-            <div style="display: flex; align-items: center; gap: 0.8rem;">
+            <div class="header-top">
                 <h1>Dashboard de Pedidos</h1>
+                <div class="mobile-header-actions">
+                    <span id="last-updated-mobile" class="time">Actualizando...</span>
+                    <button type="button" id="toggle-filters-btn" class="btn-toggle-filters" onclick="toggleMobileFilters()">
+                        🔍 Filtros <span id="toggle-filters-arrow">▼</span>
+                    </button>
+                </div>
             </div>
-            <div class="header-controls">
+            <div class="header-controls mobile-collapsed" id="header-controls">
                 <input type="text" id="order-search" class="search-input" placeholder="🔍 Buscar teléfono, cliente, producto, dir...">
                 <select id="filter-payment" class="filter-select">
                     <option value="ALL">💳 Todos los métodos</option>
-                    <option value="CONFIRMADO">⭐ Nequi / Transferencia (Confirmados)</option>
+                    <option value="CONFIRMADO">⭐ Nequi / Transf. (Confirmados)</option>
                     <option value="NEQUI">🟣 Nequi (Todos)</option>
                     <option value="TRANSFERENCIA">🏦 Transferencia (Todos)</option>
                     <option value="EFECTIVO">💵 Efectivo</option>
@@ -3614,7 +3711,7 @@ async def dashboard():
             <button class="tab-btn" data-tab="En proceso">En proceso <span class="badge" id="badge-proceso">0</span></button>
             <button class="tab-btn" data-tab="Despachados">Despachados <span class="badge" id="badge-despachados">0</span></button>
         </div>
-        <div class="container">
+        <div class="container" id="scroll-container">
             <div id="orders-container" class="orders-grid">
                 <!-- Orders injected here -->
             </div>
@@ -3638,7 +3735,53 @@ async def dashboard():
 
             const tabs = document.querySelectorAll('.tab-btn');
             const container = document.getElementById('orders-container');
+            const scrollContainer = document.getElementById('scroll-container');
             const lastUpdated = document.getElementById('last-updated');
+            const lastUpdatedMobile = document.getElementById('last-updated-mobile');
+            const headerControls = document.getElementById('header-controls');
+            const toggleFiltersBtn = document.getElementById('toggle-filters-btn');
+            const toggleFiltersArrow = document.getElementById('toggle-filters-arrow');
+
+            function setMobileFiltersCollapsed(collapsed) {
+                if (!headerControls || !toggleFiltersArrow) return;
+                if (collapsed) {
+                    headerControls.classList.add('mobile-collapsed');
+                    toggleFiltersArrow.innerText = '▼';
+                } else {
+                    headerControls.classList.remove('mobile-collapsed');
+                    toggleFiltersArrow.innerText = '▲';
+                }
+            }
+
+            function toggleMobileFilters() {
+                if (!headerControls) return;
+                const isCollapsed = headerControls.classList.contains('mobile-collapsed');
+                setMobileFiltersCollapsed(!isCollapsed);
+            }
+
+            function updateFilterButtonIndicator() {
+                if (!toggleFiltersBtn) return;
+                const hasSearch = orderSearchInput && orderSearchInput.value.trim().length > 0;
+                const hasPayment = filterPaymentSelect && filterPaymentSelect.value !== 'ALL';
+                if (hasSearch || hasPayment) {
+                    toggleFiltersBtn.classList.add('active-filter');
+                } else {
+                    toggleFiltersBtn.classList.remove('active-filter');
+                }
+            }
+
+            if (scrollContainer) {
+                let lastScrollY = 0;
+                scrollContainer.addEventListener('scroll', () => {
+                    if (window.innerWidth > 768) return;
+                    if (document.activeElement === orderSearchInput) return;
+                    const currentY = scrollContainer.scrollTop;
+                    if (currentY > 35 && currentY > lastScrollY + 10) {
+                        setMobileFiltersCollapsed(true);
+                    }
+                    lastScrollY = currentY;
+                }, { passive: true });
+            }
 
             tabs.forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -3653,10 +3796,12 @@ async def dashboard():
             const filterPaymentSelect = document.getElementById('filter-payment');
 
             orderSearchInput.addEventListener('input', () => {
+                updateFilterButtonIndicator();
                 renderOrders();
             });
 
             filterPaymentSelect.addEventListener('change', () => {
+                updateFilterButtonIndicator();
                 renderOrders();
             });
 
@@ -3738,7 +3883,9 @@ async def dashboard():
                     renderOrders();
                     
                     const now = new Date();
-                    lastUpdated.innerText = `Última act: ${now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: true})}`;
+                    const timeTxt = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: true});
+                    lastUpdated.innerText = `Última act: ${timeTxt}`;
+                    if (lastUpdatedMobile) lastUpdatedMobile.innerText = timeTxt;
                 } catch (e) {
                     console.error('Error fetching orders:', e);
                 }
@@ -3787,12 +3934,10 @@ async def dashboard():
 
             function isMetaPhone(p) {
                 if (!p) return false;
-                const raw = String(p).trim();
+                const raw = String(p).trim().replace(/@(s\\.whatsapp\\.net|c\\.us)$/i, '').trim();
                 if (raw.includes('@') || /[a-zA-Z_]/.test(raw)) return true;
                 const digits = raw.replace(/[^0-9]/g, '');
                 if (digits.length >= 14 || digits.length < 10) return true;
-                if (digits.length === 10 && !digits.startsWith('3') && !digits.startsWith('60')) return true;
-                if (digits.length === 12 && !digits.startsWith('573') && !digits.startsWith('5760') && !digits.startsWith('593')) return true;
                 return false;
             }
 

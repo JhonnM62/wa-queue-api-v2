@@ -77,9 +77,9 @@ def enviar_notificacion_tool(
 ) -> str:
     """Envía una notificación al vendedor y guarda el pedido en el dashboard de ventas.
     Úsala SOLO cuando se haya concretado un pedido final.
-    Debes extraer de la conversación el resumen general, la lista de productos, el total a cobrar, la dirección, el método de pago, el teléfono de contacto del cliente (si lo dio, ej. '3163287811', sino ''), y el nombre del cliente (si lo dio, sino 'No especificado').
+    Debes extraer de la conversación el resumen general, la lista de productos, el total a cobrar, la dirección, el método de pago, el teléfono de contacto del cliente (SOLO relevante cuando el remitente es un Meta ID largo; si el contacto ya viene con su número de WhatsApp normal, el sistema tomará automáticamente el número de la petición `lineaWA`), y el nombre del cliente (si lo dio, sino 'No especificado').
     
-    IMPORTANTE PARA DIRECCIÓN: La 'direccion_envio' DEBE ser SIEMPRE la dirección literal y explícita del cliente. Si el cliente dice "la misma dirección de siempre" o la dirección ya se mencionó en el historial, DEBES buscarla en el contexto y escribirla completa. NUNCA escribas "N/A" o "Ya registrada" si la dirección es conocida o se puede deducir del historial.
+    IMPORTANTE PARA DIRECCIÓN: La 'direccion_envio' DEBE ser SIEMPRE únicamente la dirección física literal y explícita del cliente (NO incluyas el número de teléfono dentro del campo dirección). Si el cliente dice "la misma dirección de siempre" o la dirección ya se mencionó en el historial, DEBES buscarla en el contexto y escribirla completa. NUNCA escribas "N/A" o "Ya registrada" si la dirección es conocida o se puede deducir del historial.
     Solo si algún dato realmente no existe o no aplica bajo ninguna circunstancia, pasa una cadena vacía.
     """
     import httpx
@@ -88,14 +88,15 @@ def enviar_notificacion_tool(
     import time
     from datetime import datetime, timezone
 
-    config_dict = config["configurable"].get("config_dict", {})
+    configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+    config_dict = configurable.get("config_dict", {})
     
     server_url = (config_dict.get("server") or "").strip()
     token = config_dict.get("token") or ""
     receiver = (config_dict.get("receiver") or config_dict.get("lineaogruponotificacion") or "").strip()
     is_group = config_dict.get("is_group", False)
     userbot = config_dict.get("userbot_identifier")
-    user_phone = config_dict.get("user_phone", "")
+    user_phone = str(config_dict.get("user_phone") or configurable.get("phone") or "").strip()
 
     # Auto-detectar si el receiver es grupo por formato (@g.us o numérico de >15 dígitos)
     if not is_group and receiver:
@@ -170,7 +171,6 @@ def enviar_notificacion_tool(
     
     total_a_cobrar = format_money(total_a_cobrar)
 
-    is_meta = is_meta_identifier(user_phone)
     phone_info = resolve_order_phones(
         api_linea_wa=user_phone,
         provided_phone=telefono_cliente,
@@ -181,6 +181,22 @@ def enviar_notificacion_tool(
     assigned_phone = phone_info["assigned_phone"]
     cliente_str = phone_info["cliente_str"]
     real_phone = phone_info["extracted_phone"] if is_meta else ""
+
+    if not is_meta and telefono_cliente and telefono_cliente.strip():
+        import re
+        typed_digits = re.sub(r'\D', '', str(telefono_cliente))
+        api_digits = re.sub(r'\D', '', str(assigned_phone))
+        if typed_digits and len(typed_digits) >= 7 and typed_digits not in api_digits:
+            real_local = api_digits[-10:] if len(api_digits) >= 10 else api_digits
+            print(
+                f"[tools/enviar_notificacion/{user_phone}] ⚠️ [PHONE-OVERRIDE] El cliente escribió '{telefono_cliente}', "
+                f"pero NO es Meta ID. Se ignora el número escrito y se fuerza lineaWA='{assigned_phone}'.",
+                flush=True
+            )
+            if direccion_envio and typed_digits in direccion_envio:
+                direccion_envio = direccion_envio.replace(typed_digits, real_local)
+            if resumen_general and typed_digits in resumen_general:
+                resumen_general = resumen_general.replace(typed_digits, real_local)
 
     # --- Lógica de deduplicación unificada con main.py ---
     # Usar el teléfono como order_id base para evitar duplicados entre las dos rutas
@@ -202,7 +218,7 @@ def enviar_notificacion_tool(
                 or odata.get("phone") == display_phone 
                 or odata.get("phone") == assigned_phone
                 or odata.get("meta_identifier") == user_phone
-                or (phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
+                or (is_meta and phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
             )
             if matches_user and odata.get("status") != "Despachados":
                 order_ts = odata.get("timestamp", 0)
@@ -256,8 +272,10 @@ def enviar_notificacion_tool(
             orders_data[existing_order_id]["direccion"] = direccion_envio
             orders_data[existing_order_id]["metodo_pago"] = metodo_pago
             orders_data[existing_order_id]["phone"] = assigned_phone
-            if phone_info["extracted_phone"]:
+            if is_meta and phone_info["extracted_phone"]:
                 orders_data[existing_order_id]["extracted_phone"] = phone_info["extracted_phone"]
+            elif not is_meta:
+                orders_data[existing_order_id]["extracted_phone"] = None
             if is_meta:
                 orders_data[existing_order_id]["meta_identifier"] = user_phone
             if nombre_cliente and nombre_cliente.strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:

@@ -2,31 +2,62 @@ import re
 from typing import Optional
 
 
+def normalize_whatsapp_phone(identifier: Optional[str]) -> str:
+    """
+    Limpia sufijos estándar de JID de WhatsApp (@s.whatsapp.net, @c.us)
+    y caracteres de formato (+, espacios, guiones, paréntesis) cuando es un teléfono normal.
+    Si es un LID (@lid) o un username con letras, lo conserva tal cual (sin espacios extremos).
+    """
+    if not identifier:
+        return ""
+    raw = str(identifier).strip()
+    # Quitar sufijos estándar de teléfono en Baileys / WhatsApp Web
+    raw_no_jid = re.sub(r'@(?:s\.whatsapp\.net|c\.us)$', '', raw, flags=re.IGNORECASE).strip()
+
+    # Si después de quitar el JID estándar todavía tiene @ (ej. @lid) o letras o guión bajo, devolver tal cual
+    if "@" in raw_no_jid or any(c.isalpha() for c in raw_no_jid) or "_" in raw_no_jid:
+        return raw_no_jid
+
+    digits = re.sub(r'\D', '', raw_no_jid)
+    if not digits:
+        return raw_no_jid
+
+    # Si es un móvil colombiano de 10 dígitos (3XXXXXXXXX), normalizar con prefijo 57
+    if len(digits) == 10 and digits.startswith("3"):
+        return "57" + digits
+
+    return digits
+
+
 def is_meta_identifier(identifier: Optional[str]) -> bool:
     """
     Determina si un identificador corresponde a un ID interno de Meta,
     ManyChat, WhatsApp LID o nombre de usuario (@username) en lugar de un teléfono celular real.
     
-    Casos comunes:
-    - Usernames: '@carlos_restrepo', 'user_12345'
-    - LIDs de WhatsApp: '140222780145809@lid', '179847494119431'
-    - Meta Page/User Scoped IDs: 14 a 18 dígitos numéricos
-    - Cuentas con privacidad/número oculto en WhatsApp o ManyChat
+    Regla:
+    - Sufijos estándar de WhatsApp (@s.whatsapp.net, @c.us) se limpian primero (NO son Meta ID).
+    - Si contiene '@lid', '@' o letras/guiones bajos -> True (es Meta ID / LID / username).
+    - Si tiene 14 o más dígitos numéricos (ej. 140222780145809, 179847494119431) -> True (Meta ID / LID largo).
+    - Si tiene menos de 10 dígitos -> True (identificador inválido/corto, no es celular válido).
+    - Cualquier número de 10 a 13 dígitos que viene en lineaWA desde Baileys -> False (es el número real del cliente).
     """
     if not identifier:
         return False
     raw = str(identifier).strip()
 
+    # Ignorar sufijos estándar de JID de teléfono en WhatsApp
+    raw_no_jid = re.sub(r'@(?:s\.whatsapp\.net|c\.us)$', '', raw, flags=re.IGNORECASE).strip()
+
     # 1. Si contiene @ (ej. @usuario, @lid) o letras o guión bajo
-    if "@" in raw or any(c.isalpha() for c in raw) or "_" in raw:
+    if "@" in raw_no_jid or any(c.isalpha() for c in raw_no_jid) or "_" in raw_no_jid:
         return True
 
     # 2. Dejar solo dígitos
-    digits = re.sub(r'\D', '', raw)
+    digits = re.sub(r'\D', '', raw_no_jid)
     if not digits:
         return True
 
-    # 3. LIDs y Meta Scoped IDs: típicamente tienen 14 o más dígitos (ej. 140222780145809, 179847494119431)
+    # 3. LIDs y Meta Scoped IDs: son números largos de 14 o más dígitos (ej. 140222780145809, 179847494119431)
     if len(digits) >= 14:
         return True
 
@@ -34,22 +65,7 @@ def is_meta_identifier(identifier: Optional[str]) -> bool:
     if len(digits) < 10:
         return True
 
-    # 5. Validación de números reales (Colombia y frontera Ecuador):
-    # - Móvil Colombia: 10 dígitos (3XXXXXXXXX) o 12 dígitos (573XXXXXXXXX)
-    # - Fijo Colombia: 10 dígitos (60XXXXXXXX) o 12 dígitos (5760XXXXXXX)
-    # - Móvil Ecuador: 12 dígitos (5939XXXXXXXX) o 11 dígitos
-    if len(digits) == 10 and not (digits.startswith("3") or digits.startswith("60")):
-        return True
-
-    if len(digits) == 12 and not (digits.startswith("573") or digits.startswith("5760") or digits.startswith("593")):
-        return True
-
-    if len(digits) == 13:
-        return True
-
-    if len(digits) == 11 and not digits.startswith("593"):
-        return True
-
+    # 5. Entre 10 y 13 dígitos numéricos: es un número telefónico real proveniente de WhatsApp
     return False
 
 
@@ -147,15 +163,16 @@ def resolve_order_phones(
     """
     raw_api = str(api_linea_wa or "").strip()
     is_meta = is_meta_identifier(raw_api)
-    extracted_clean = extract_provided_phone(provided_phone) if provided_phone else ""
+    normalized_api = normalize_whatsapp_phone(raw_api) if not is_meta else raw_api
+    extracted_clean = extract_provided_phone(provided_phone) if (is_meta and provided_phone) else ""
 
     nombre_clean = ""
     if nombre_cliente and str(nombre_cliente).strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na", "null", "none"]:
         nombre_clean = str(nombre_cliente).strip()
 
     if is_meta:
-        # Contacto CON Meta ID:
-        # Se toma el número proporcionado por el cliente
+        # Contacto CON Meta ID (número largo >= 14 dígitos o @lid):
+        # Se toma el número proporcionado por el cliente en el chat
         if extracted_clean:
             assigned_phone = extracted_clean
             display_phone = extracted_clean
@@ -180,14 +197,17 @@ def resolve_order_phones(
             )
 
         meta_identifier = raw_api
+        extracted_phone_out = extracted_clean or (str(provided_phone).strip() if provided_phone else None)
     else:
-        # Contacto SIN Meta ID:
-        # Se toma SIEMPRE el número que viene desde la API.
-        # No se le asigna lo que digitó el cliente para evitar errores si lo escribió mal.
-        assigned_phone = raw_api
-        display_phone = raw_api
+        # Contacto SIN Meta ID (viene de un número real en /wa/process):
+        # Se toma SIEMPRE el número que viene desde la petición API (lineaWA).
+        # NUNCA se usa ni se guarda el número escrito por el cliente en el chat,
+        # para evitar errores de digitación (ej. termina en 5 en vez de 4).
+        assigned_phone = normalized_api or raw_api
+        display_phone = normalized_api or raw_api
         has_real_phone = True
         meta_identifier = None
+        extracted_phone_out = None
         if nombre_clean:
             cliente_str = f"{nombre_clean} ({display_phone})"
         else:
@@ -199,7 +219,7 @@ def resolve_order_phones(
         "assigned_phone": assigned_phone,
         "display_phone": display_phone,
         "meta_identifier": meta_identifier,
-        "extracted_phone": extracted_clean or (str(provided_phone).strip() if provided_phone else None),
+        "extracted_phone": extracted_phone_out,
         "has_real_phone": has_real_phone,
         "cliente_str": cliente_str,
         "link_message_text": link_message_text

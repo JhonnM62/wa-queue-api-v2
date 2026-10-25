@@ -173,11 +173,17 @@ def call_model(state: AgentState):
             print(f"{log_prefix} [RAG-COMPLETO] ⚠️ No se pudo cargar el catálogo: {rag_err}")
 
     # Detectar si el remitente es un identificador de Meta / ManyChat / Username
-    current_phone = bot_config.get("user_phone") or state.get("phone", "")
+    current_phone = str(bot_config.get("user_phone") or state.get("phone", "")).strip()
     meta_prompt_block = ""
     if is_meta_identifier(current_phone):
         meta_prompt_block = get_meta_directive_prompt(current_phone)
         print(f"{log_prefix} ⚠️ [META-ID DETECTADO] '{current_phone}' es un identificador de Meta/ManyChat/Username. Inyectando directiva para exigir número celular real.")
+    elif current_phone and current_phone != "simulador":
+        meta_prompt_block = (
+            f"\n\n📌 DATO VERIFICADO DEL SISTEMA (lineaWA): El número real de WhatsApp de este cliente es '{current_phone}'. "
+            f"Si el cliente escribe otro número por error de digitación en el chat, en `enviar_notificacion_tool` y en tus registros internos "
+            f"prevalece SIEMPRE el número real de la línea de WhatsApp ('{current_phone}').\n"
+        )
 
     # Lógica para inyectar System Prompt como primer mensaje si no existe al inicio
     if not messages or not isinstance(messages[0], SystemMessage):
