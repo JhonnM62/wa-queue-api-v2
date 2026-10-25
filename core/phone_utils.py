@@ -383,3 +383,36 @@ def canonical_order_signature(detalle: Optional[str], total: Optional[str]) -> t
     tot_digits = re.sub(r'\D', '', str(total or ""))
     return det_norm, tot_digits
 
+
+def phones_match(p1: Optional[str], p2: Optional[str]) -> bool:
+    """
+    Compara dos identificadores o números telefónicos para verificar si pertenecen al mismo usuario.
+    Normaliza quitando sufijos (@s.whatsapp.net, @c.us), signos y espacios.
+    Para números telefónicos estándar, compara los últimos 10 dígitos (ej. 573225885510 == 3225885510).
+    Para identificadores Meta ID o alfanuméricos, compara la cadena limpia.
+    """
+    if not p1 or not p2:
+        return False
+    s1 = str(p1).strip()
+    s2 = str(p2).strip()
+    if not s1 or not s2:
+        return False
+    if s1.lower() == s2.lower():
+        return True
+
+    s1_clean = re.sub(r'@(?:s\.whatsapp\.net|c\.us)$', '', s1, flags=re.IGNORECASE).strip()
+    s2_clean = re.sub(r'@(?:s\.whatsapp\.net|c\.us)$', '', s2, flags=re.IGNORECASE).strip()
+    if s1_clean.lower() == s2_clean.lower():
+        return True
+
+    d1 = re.sub(r'\D', '', s1_clean)
+    d2 = re.sub(r'\D', '', s2_clean)
+    if d1 and d2:
+        if d1 == d2:
+            return True
+        if len(d1) >= 10 and len(d2) >= 10 and d1[-10:] == d2[-10:]:
+            return True
+
+    return False
+
+

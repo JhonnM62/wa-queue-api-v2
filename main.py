@@ -36,6 +36,7 @@ from core.phone_utils import (
     format_detalle_wa,
     format_money,
     canonical_order_signature,
+    phones_match,
 )
 
 # Cargar variables de entorno del archivo .env
@@ -2429,13 +2430,13 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 if not isinstance(_odata, dict):
                                     continue
                                 _matches = (
-                                    _odata.get("phone") == current_task_req_info.lineaWA
-                                    or _odata.get("phone") == _check_info["assigned_phone"]
-                                    or _odata.get("meta_identifier") == current_task_req_info.lineaWA
+                                    phones_match(_odata.get("phone"), current_task_req_info.lineaWA)
+                                    or phones_match(_odata.get("phone"), _check_info["assigned_phone"])
+                                    or (_odata.get("meta_identifier") and phones_match(_odata.get("meta_identifier"), current_task_req_info.lineaWA))
                                 )
                                 if _matches and _odata.get("status") != "Despachados":
                                     _ots = _odata.get("timestamp", 0)
-                                    if _ots and (_now_ms - _ots < 60 * 60 * 1000):
+                                    if _ots and (_now_ms - _ots < 4 * 3600 * 1000):
                                         has_recent_active_order = True
                                         recent_order_id_found = _oid
                                         break
@@ -2533,7 +2534,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 cliente_str = phone_info["cliente_str"]
                                 real_phone = phone_info["extracted_phone"] if is_meta else ""
 
-                                ACTIVE_MODIFICATION_WINDOW_MS = 45 * 60 * 1000
+                                ACTIVE_ORDER_WINDOW_MS = 4 * 3600 * 1000
                                 is_modification = False
                                 existing_order_id = None
                                 
@@ -2545,16 +2546,20 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 for oid, odata in sorted_orders:
                                     if not isinstance(odata, dict):
                                         continue
+                                    is_active_status = odata.get("status") in ["Recientes", "En proceso"]
                                     matches_user = (
-                                        odata.get("phone") == current_task_req_info.lineaWA
-                                        or odata.get("phone") == display_phone
-                                        or odata.get("phone") == assigned_phone
-                                        or odata.get("meta_identifier") == current_task_req_info.lineaWA
-                                        or (is_meta and phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
+                                        phones_match(odata.get("phone"), current_task_req_info.lineaWA)
+                                        or phones_match(odata.get("phone"), display_phone)
+                                        or phones_match(odata.get("phone"), assigned_phone)
+                                        or (odata.get("meta_identifier") and (
+                                            phones_match(odata.get("meta_identifier"), current_task_req_info.lineaWA)
+                                            or phones_match(odata.get("meta_identifier"), display_phone)
+                                        ))
+                                        or (is_meta and phone_info.get("extracted_phone") and phones_match(odata.get("extracted_phone"), phone_info["extracted_phone"]))
                                     )
-                                    if matches_user and odata.get("status") == "Recientes":
+                                    if matches_user and is_active_status:
                                         order_ts = odata.get("timestamp", 0)
-                                        if order_ts and (order_timestamp - order_ts < ACTIVE_MODIFICATION_WINDOW_MS):
+                                        if order_ts and (order_timestamp - order_ts < ACTIVE_ORDER_WINDOW_MS):
                                             is_modification = True
                                             existing_order_id = oid
                                             break
@@ -2573,7 +2578,16 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         order_info.get("detalle_completo", ""),
                                         order_info.get("total_a_cobrar", "")
                                     )
-                                    if old_sig == new_sig:
+                                    old_addr_norm = "".join(c.lower() for c in str(existing_order.get("direccion", "")) if c.isascii() and c.isalnum())
+                                    new_addr_norm = "".join(c.lower() for c in str(order_info.get("direccion", "") or "") if c.isascii() and c.isalnum())
+                                    old_mp_norm = "".join(c.lower() for c in str(existing_order.get("metodo_pago", "")) if c.isascii() and c.isalnum())
+                                    new_mp_norm = "".join(c.lower() for c in str(order_info.get("metodo_pago", "") or "") if c.isascii() and c.isalnum())
+
+                                    same_items_and_total = (old_sig == new_sig)
+                                    same_address = (old_addr_norm == new_addr_norm) or not new_addr_norm
+                                    same_payment = (old_mp_norm == new_mp_norm) or not new_mp_norm
+
+                                    if same_items_and_total and same_address and same_payment:
                                         is_exact_duplicate = True
 
                                 if is_exact_duplicate:

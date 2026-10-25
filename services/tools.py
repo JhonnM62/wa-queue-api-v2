@@ -8,6 +8,7 @@ from core.phone_utils import (
     format_detalle_wa,
     format_money,
     canonical_order_signature,
+    phones_match,
 )
 
 
@@ -174,9 +175,10 @@ def enviar_notificacion_tool(
                 resumen_general = resumen_general.replace(typed_digits, real_local)
 
     # --- Lógica de deduplicación y detección de modificaciones ---
-    # Solo se considera modificación si existe un pedido aún en "Recientes" (no despachado ni en proceso)
-    # dentro de una ventana corta de sesión activa (45 minutos) y el cliente cambió productos, total o dirección.
-    ACTIVE_MODIFICATION_WINDOW_MS = 45 * 60 * 1000
+    # Un pedido activo (en estado "Recientes" o "En proceso", es decir, no despachado aún)
+    # se considera el mismo pedido si el cliente envía modificaciones de productos, dirección,
+    # método de pago (ej. efectivo, paga completo, Nequi) dentro de una ventana de sesión activa (4 horas).
+    ACTIVE_ORDER_WINDOW_MS = 4 * 3600 * 1000
     is_modification = False
     existing_order_id = None
 
@@ -197,16 +199,20 @@ def enviar_notificacion_tool(
         for oid, odata in sorted_orders:
             if not isinstance(odata, dict):
                 continue
+            is_active_status = odata.get("status") in ["Recientes", "En proceso"]
             matches_user = (
-                odata.get("phone") == user_phone 
-                or odata.get("phone") == display_phone 
-                or odata.get("phone") == assigned_phone
-                or odata.get("meta_identifier") == user_phone
-                or (is_meta and phone_info["extracted_phone"] and odata.get("extracted_phone") == phone_info["extracted_phone"])
+                phones_match(odata.get("phone"), user_phone) 
+                or phones_match(odata.get("phone"), display_phone) 
+                or phones_match(odata.get("phone"), assigned_phone)
+                or (odata.get("meta_identifier") and (
+                    phones_match(odata.get("meta_identifier"), user_phone)
+                    or phones_match(odata.get("meta_identifier"), display_phone)
+                ))
+                or (is_meta and phone_info.get("extracted_phone") and phones_match(odata.get("extracted_phone"), phone_info["extracted_phone"]))
             )
-            if matches_user and odata.get("status") == "Recientes":
+            if matches_user and is_active_status:
                 order_ts = odata.get("timestamp", 0)
-                if order_ts and (order_timestamp - order_ts < ACTIVE_MODIFICATION_WINDOW_MS):
+                if order_ts and (order_timestamp - order_ts < ACTIVE_ORDER_WINDOW_MS):
                     is_modification = True
                     existing_order_id = oid
                     break
@@ -225,7 +231,7 @@ def enviar_notificacion_tool(
                 if old_addr and old_addr.lower() not in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"]:
                     direccion_envio = old_addr
 
-            # Comparar firma canónica de productos + total + dirección
+            # Comparar firma canónica de productos + total + dirección + método de pago
             old_sig = canonical_order_signature(
                 existing_order.get("detalle_completo", ""),
                 existing_order.get("total_a_cobrar", "")
@@ -233,10 +239,14 @@ def enviar_notificacion_tool(
             new_sig = canonical_order_signature(detalle_completo, total_a_cobrar)
             old_addr_norm = "".join(c.lower() for c in str(old_addr) if c.isascii() and c.isalnum())
             new_addr_norm = "".join(c.lower() for c in str(direccion_envio or "") if c.isascii() and c.isalnum())
+            old_mp_norm = "".join(c.lower() for c in str(existing_order.get("metodo_pago", "")) if c.isascii() and c.isalnum())
+            new_mp_norm = "".join(c.lower() for c in str(metodo_pago or "") if c.isascii() and c.isalnum())
 
             same_items_and_total = is_generic_summary or (old_sig == new_sig)
             same_address = (old_addr_norm == new_addr_norm) or not new_addr_norm
-            if same_items_and_total and same_address:
+            same_payment = (old_mp_norm == new_mp_norm) or not new_mp_norm
+
+            if same_items_and_total and same_address and same_payment:
                 is_exact_duplicate = True
 
             # ACTUALIZAR in-place: preservar timestamp original, status e historial
