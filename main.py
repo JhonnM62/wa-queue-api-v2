@@ -2436,7 +2436,7 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 )
                                 if _matches and _odata.get("status") != "Despachados":
                                     _ots = _odata.get("timestamp", 0)
-                                    if _ots and (_now_ms - _ots < 4 * 3600 * 1000):
+                                    if _ots and (_now_ms - _ots < 20 * 60 * 1000):
                                         has_recent_active_order = True
                                         recent_order_id_found = _oid
                                         break
@@ -2534,9 +2534,12 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                 cliente_str = phone_info["cliente_str"]
                                 real_phone = phone_info["extracted_phone"] if is_meta else ""
 
-                                ACTIVE_ORDER_WINDOW_MS = 4 * 3600 * 1000
+                                MODIFICATION_WINDOW_MS = 20 * 60 * 1000        # 20 minutos ("aún estamos a tiempo")
+                                PAYMENT_UPDATE_WINDOW_MS = 2 * 3600 * 1000      # 2 horas para completar pago/datos del mismo pedido
                                 is_modification = False
                                 existing_order_id = None
+                                existing_order = None
+                                same_items_and_total = False
                                 
                                 sorted_orders = sorted(
                                     orders_data.items(),
@@ -2547,6 +2550,9 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     if not isinstance(odata, dict):
                                         continue
                                     is_active_status = odata.get("status") in ["Recientes", "En proceso"]
+                                    if not is_active_status:
+                                        continue
+
                                     matches_user = (
                                         phones_match(odata.get("phone"), current_task_req_info.lineaWA)
                                         or phones_match(odata.get("phone"), display_phone)
@@ -2557,33 +2563,61 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                         ))
                                         or (is_meta and phone_info.get("extracted_phone") and phones_match(odata.get("extracted_phone"), phone_info["extracted_phone"]))
                                     )
-                                    if matches_user and is_active_status:
-                                        order_ts = odata.get("timestamp", 0)
-                                        if order_ts and (order_timestamp - order_ts < ACTIVE_ORDER_WINDOW_MS):
+                                    if not matches_user:
+                                        continue
+
+                                    order_ts = odata.get("timestamp", 0)
+                                    if not order_ts:
+                                        continue
+
+                                    time_diff_ms = order_timestamp - order_ts
+
+                                    # Comparar firma canónica de productos + total
+                                    old_sig = canonical_order_signature(
+                                        odata.get("detalle_completo", "") or odata.get("pedido", ""),
+                                        odata.get("total_a_cobrar", "")
+                                    )
+                                    new_sig = canonical_order_signature(
+                                        order_info.get("detalle_completo", ""),
+                                        order_info.get("total_a_cobrar", "")
+                                    )
+                                    items_match = (old_sig == new_sig)
+
+                                    if items_match:
+                                        if time_diff_ms < PAYMENT_UPDATE_WINDOW_MS:
                                             is_modification = True
                                             existing_order_id = oid
+                                            existing_order = odata
+                                            same_items_and_total = True
+                                            break
+                                    else:
+                                        if time_diff_ms < MODIFICATION_WINDOW_MS:
+                                            is_modification = True
+                                            existing_order_id = oid
+                                            existing_order = odata
+                                            same_items_and_total = False
+                                            break
+                                        else:
+                                            print(
+                                                f"{log_prefix} ⏱️ Pasaron {time_diff_ms / 60000:.1f} min desde el pedido {oid} (> 20 min). "
+                                                f"Como el cliente pidió productos adicionales/diferentes, se crea un NUEVO pedido independiente.",
+                                                flush=True
+                                            )
+                                            is_modification = False
+                                            existing_order_id = None
+                                            existing_order = None
                                             break
                                 
                                 order_id = existing_order_id if existing_order_id else f"ORDER_{int(time.time())}_{display_phone[-4:]}"
 
                                 # --- Control estricto de duplicados por firma canónica del pedido ---
                                 is_exact_duplicate = False
-                                if is_modification and existing_order_id:
-                                    existing_order = orders_data[existing_order_id]
-                                    old_sig = canonical_order_signature(
-                                        existing_order.get("detalle_completo", ""),
-                                        existing_order.get("total_a_cobrar", "")
-                                    )
-                                    new_sig = canonical_order_signature(
-                                        order_info.get("detalle_completo", ""),
-                                        order_info.get("total_a_cobrar", "")
-                                    )
+                                if is_modification and existing_order_id and existing_order:
                                     old_addr_norm = "".join(c.lower() for c in str(existing_order.get("direccion", "")) if c.isascii() and c.isalnum())
                                     new_addr_norm = "".join(c.lower() for c in str(order_info.get("direccion", "") or "") if c.isascii() and c.isalnum())
                                     old_mp_norm = "".join(c.lower() for c in str(existing_order.get("metodo_pago", "")) if c.isascii() and c.isalnum())
                                     new_mp_norm = "".join(c.lower() for c in str(order_info.get("metodo_pago", "") or "") if c.isascii() and c.isalnum())
 
-                                    same_items_and_total = (old_sig == new_sig)
                                     same_address = (old_addr_norm == new_addr_norm) or not new_addr_norm
                                     same_payment = (old_mp_norm == new_mp_norm) or not new_mp_norm
 
@@ -2687,7 +2721,10 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     # Cabecera dinámica unificada según si es nuevo o modificado
                                     header_title = "🛍️ *NUEVO PEDIDO* 🛍️"
                                     if is_modification:
-                                        header_title = "🔄 *PEDIDO MODIFICADO* 🔄"
+                                        if not same_items_and_total:
+                                            header_title = "🔄 *PEDIDO MODIFICADO / ADICIÓN* 🔄"
+                                        else:
+                                            header_title = "🔄 *PEDIDO ACTUALIZADO (PAGO/DATOS)* 🔄"
 
                                     notification_text = (
                                         f"{header_title}\n\n"

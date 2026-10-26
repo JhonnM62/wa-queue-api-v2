@@ -111,11 +111,15 @@ def call_model(state: AgentState):
         available_tools.append(enviar_notificacion_tool)
         reglas_herramientas_extra += (
             "⚠️ REGLA OBLIGATORIA DE NOTIFICACIÓN DE PEDIDO (`enviar_notificacion_tool`):\n"
-            "Cuando el cliente confirme o cierre su pedido (productos elegidos, total, método de pago y dirección de entrega acordados), "
-            "DEBES invocar la herramienta `enviar_notificacion_tool` ANTES de emitir tu respuesta final en JSON. "
-            "En `lista_productos` escribe UNA SOLA LÍNEA concisa por cada producto (`1x Nombre del producto - $Subtotal`), "
-            "SIN repetir líneas separadas de 'Precio Unidad', 'Subtotal' ni 'Total sin el valor del domicilio'. "
-            "Si el pedido ya fue confirmado y notificado y el cliente solo responde con un agradecimiento ('gracias', 'listo', 'ok') sin cambiar productos ni dirección, NO vuelvas a invocar la herramienta.\n\n"
+            "1. CUÁNDO INVOCAR:\n"
+            "- Cuando el cliente confirme o cierre su pedido (productos elegidos, total, método de pago y dirección de entrega acordados).\n"
+            "- Si el cliente MODIFICA o AGREGA productos al pedido en curso, o aclara/cambia su método de pago (ej. efectivo, con cuánto paga para el cambio, comprobante de Nequi), o precisa su dirección/celular, DEBES invocar la herramienta para que el sistema actualice el pedido en el dashboard y notifique al equipo.\n"
+            "- Si el cliente indica expresamente que desea hacer un pedido completamente NUEVO e INDEPENDIENTE para otra persona o dirección distinta, pon `es_pedido_nuevo_separado=True`.\n"
+            "2. CUÁNDO NO INVOCAR:\n"
+            "- Si el pedido ya fue confirmado y notificado y el cliente solo responde con un agradecimiento ('gracias', 'listo', 'ok') sin cambiar productos, método de pago ni dirección, NO vuelvas a invocar la herramienta.\n"
+            "3. FORMATO OBLIGATORIO:\n"
+            "- En `lista_productos` escribe UNA SOLA LÍNEA concisa por cada producto (`[Cantidad]x [Nombre del producto] - $[Subtotal]`), "
+            "SIN repetir líneas separadas de 'Precio Unidad', 'Subtotal' ni 'Total sin el valor del domicilio'.\n\n"
         )
         
     # Añadir herramientas nativas de Google (Search, Maps) si están habilitadas
