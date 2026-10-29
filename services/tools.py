@@ -41,6 +41,115 @@ def buscar_catalogo_tool(query: str, config: RunnableConfig) -> str:
     return search_knowledge(bot_id=bot_id, query=query, api_key=api_key)
 
 
+def _get_fidelidad_api_url(config_dict: dict) -> str:
+    """Extrae la URL base del backend ERP a partir de pos_endpoints o fallback por defecto."""
+    pos_endpoints_cfg = config_dict.get("pos_endpoints", "[]")
+    if pos_endpoints_cfg:
+        try:
+            endpoints = json.loads(pos_endpoints_cfg) if isinstance(pos_endpoints_cfg, str) else pos_endpoints_cfg
+            if isinstance(endpoints, list):
+                for ep in endpoints:
+                    if not ep.get("activo", True):
+                        continue
+                    url = str(ep.get("url", "")).strip()
+                    if url.startswith(("http://", "https://")):
+                        if "/domicilios/webhook" in url:
+                            return url.split("/domicilios/webhook")[0]
+                        if "/api/v1" in url:
+                            parts = url.split("/api/v1")
+                            return parts[0] + "/api/v1"
+        except Exception as e:
+            print(f"[FIDELIDAD] Error parseando pos_endpoints para URL: {e}", flush=True)
+
+    # Fallback predeterminado a la API de producción Q'hubo Mor
+    return "https://backendnestpv.autosystemprojects.site/api/v1"
+
+
+@tool
+def consultar_fidelidad_tool(identificador: str, config: RunnableConfig) -> str:
+    """Consulta la tarjeta de fidelidad del cliente en el ERP usando su número de teléfono de WhatsApp, cédula o código POS de 6 dígitos.
+    
+    INSTRUCCIONES DE USO:
+    1. Ejecuta esta herramienta de forma SILENCIOSA al inicio del pedido usando el número de WhatsApp del cliente si no ha sido consultado.
+    2. Si el cliente te entrega su número de cédula o su código POS de 6 dígitos, consúltalo con esta herramienta.
+    
+    DEVUELVE:
+    - Estado de registro (encontrado o no encontrado).
+    - Nombre del cliente, ID y Cédula.
+    - Contador de sellos acumulados (0 a 10).
+    - Si tiene disponible el 15% de descuento en granizados (Hito 5 alcanzado).
+    - Si tiene disponible un Granizado 12oz GRATIS (Hito 10 alcanzado).
+    """
+    configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+    config_dict = configurable.get("config_dict", {})
+    
+    clean_id = str(identificador or "").strip()
+    if not clean_id:
+        clean_id = str(config_dict.get("user_phone") or configurable.get("phone") or "").strip()
+    
+    clean_id = clean_id.replace("#", "").strip()
+    if not clean_id:
+        return json.dumps({
+            "encontrado": False,
+            "mensaje": "No se proporcionó un número de teléfono, cédula o código para consultar fidelidad."
+        }, ensure_ascii=False)
+
+    base_url = _get_fidelidad_api_url(config_dict)
+    api_endpoint = f"{base_url.rstrip('/')}/clientes/fidelidad/{clean_id}"
+    
+    try:
+        with httpx.Client(timeout=10.0, verify=False) as client:
+            resp = client.get(api_endpoint)
+            if resp.status_code == 200:
+                res_data = resp.json()
+                cliente_data = res_data.get("data") if isinstance(res_data, dict) and "data" in res_data else res_data
+                
+                contador = int(cliente_data.get("contador") or 0)
+                nombre = cliente_data.get("nombre") or "Cliente"
+                id_cliente = cliente_data.get("IDcliente")
+                cedula = cliente_data.get("cedula")
+                
+                descuento_15 = contador >= 5
+                granizado_gratis = contador >= 10
+                
+                return json.dumps({
+                    "encontrado": True,
+                    "IDcliente": id_cliente,
+                    "nombre": nombre,
+                    "cedula": str(cedula) if cedula else None,
+                    "contador": contador,
+                    "descuento15Disponible": descuento_15,
+                    "granizadoGratisDisponible": granizado_gratis,
+                    "sellosRestantesPara15": max(0, 5 - contador) if contador < 5 else 0,
+                    "sellosRestantesParaGratis": max(0, 10 - contador),
+                    "mensaje": f"Cliente encontrado: {nombre} (ID #{id_cliente}). Tiene {contador}/10 sellos acumulados."
+                               + (" ¡Tiene 15% de descuento disponible en granizados!" if descuento_15 and not granizado_gratis else "")
+                               + (" ¡TIENE DERECHO A UN GRANIZADO 12oz GRATIS (con o sin licor)!" if granizado_gratis else "")
+                }, ensure_ascii=False)
+            elif resp.status_code == 404:
+                return json.dumps({
+                    "encontrado": False,
+                    "identificador": clean_id,
+                    "mensaje": f"No se encontró ninguna tarjeta de fidelidad registrada con '{clean_id}'. "
+                               "Invita amablemente al cliente a registrarse en https://qhubomor.com/fidelidad (es súper rápido y fácil) "
+                               "y a completar las misiones en https://qhubomor.com/misiones para ganar sellos extra inmediatos. "
+                               "Continúa con su pedido sin bloquearlo."
+                }, ensure_ascii=False)
+            else:
+                return json.dumps({
+                    "encontrado": False,
+                    "error_http": resp.status_code,
+                    "mensaje": f"No fue posible verificar la tarjeta en este momento (HTTP {resp.status_code}). Continúa con el pedido normalmente."
+                }, ensure_ascii=False)
+    except Exception as e:
+        print(f"[FIDELIDAD] Error consultando cliente {clean_id}: {e}", flush=True)
+        return json.dumps({
+            "encontrado": False,
+            "error": str(e),
+            "mensaje": "Error de conexión consultando fidelidad. Continúa con el pedido normalmente."
+        }, ensure_ascii=False)
+
+
 def dispatch_order_to_pos_webhooks(endpoints_json: str, payload: dict):
     """Despacha asíncronamente el pedido en segundo plano a todas las URLs de POS configuradas en paralelo."""
     if not endpoints_json:
@@ -88,7 +197,10 @@ def enviar_notificacion_tool(
     telefono_cliente: str,
     nombre_cliente: str,
     config: RunnableConfig,
-    es_pedido_nuevo_separado: bool = False
+    es_pedido_nuevo_separado: bool = False,
+    cliente_id: Optional[int] = None,
+    cliente_cedula: Optional[str] = None,
+    beneficio_fidelidad: Optional[str] = None
 ) -> str:
     """Envía una notificación al vendedor y guarda el pedido en el dashboard de ventas.
     Úsala SOLO cuando se haya concretado un pedido final o el cliente confirme/modifique un pedido en curso.
@@ -97,6 +209,11 @@ def enviar_notificacion_tool(
     PARÁMETRO 'es_pedido_nuevo_separado':
     - Pon False (por defecto) si el cliente está pidiendo por primera vez, o si está completando datos de pago/dirección, o si está cambiando o agregando productos al pedido actual en curso.
     - Pon True ÚNICAMENTE si el cliente indica de forma expresa y explícita que desea realizar un pedido completamente NUEVO y SEPARADO del anterior (por ejemplo: "quiero hacer otro pedido aparte", "este es otro pedido para otra persona").
+
+    PARÁMETROS DE FIDELIDAD (OPCIONALES):
+    - 'cliente_id': ID numérico del cliente en el ERP si fue encontrado con `consultar_fidelidad_tool`.
+    - 'cliente_cedula': Número de documento/cédula del cliente si fue identificado.
+    - 'beneficio_fidelidad': 'DESCUENTO_15' (si se aplicó 15% en granizados) o 'GRANIZADO_GRATIS' (si se redimió premio de 10 sellos), o None si no aplica.
 
     IMPORTANTE PARA LISTA DE PRODUCTOS (`lista_productos`):
     Escribe UNA SOLA LÍNEA concisa por cada producto pedido con el formato: `[Cantidad]x [Nombre del Producto] - $[Subtotal del ítem]`
@@ -368,6 +485,9 @@ def enviar_notificacion_tool(
             "orderIdWA": order_id,
             "clienteTelefono": display_phone,
             "clienteNombre": nombre_cliente if nombre_cliente and str(nombre_cliente).strip().lower() not in ["no especificado", "no aplica", "n/a", "na", ""] else "",
+            "clienteId": cliente_id,
+            "clienteCedula": cliente_cedula,
+            "beneficioFidelidad": beneficio_fidelidad,
             "direccion": direccion_envio,
             "detalleTextoWA": detalle_completo or lista_productos,
             "resumen": resumen_general,

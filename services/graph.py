@@ -18,7 +18,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
-from services.tools import buscar_catalogo_tool, enviar_notificacion_tool
+from services.tools import buscar_catalogo_tool, enviar_notificacion_tool, consultar_fidelidad_tool
 from core.phone_utils import is_meta_identifier, get_meta_directive_prompt
 try:
     from google.genai import types as genai_types
@@ -119,7 +119,35 @@ def call_model(state: AgentState):
             "- Si el pedido ya fue confirmado y notificado y el cliente solo responde con un agradecimiento ('gracias', 'listo', 'ok') sin cambiar productos, método de pago ni dirección, NO vuelvas a invocar la herramienta.\n"
             "3. FORMATO OBLIGATORIO:\n"
             "- En `lista_productos` escribe UNA SOLA LÍNEA concisa por cada producto (`[Cantidad]x [Nombre del producto] - $[Subtotal]`), "
-            "SIN repetir líneas separadas de 'Precio Unidad', 'Subtotal' ni 'Total sin el valor del domicilio'.\n\n"
+            "SIN repetir líneas separadas de 'Precio Unidad', 'Subtotal' ni 'Total sin el valor del domicilio'.\n"
+            "4. VINCULACIÓN DE FIDELIDAD:\n"
+            "- Pasa siempre `cliente_id` y `cliente_cedula` si fueron obtenidos con `consultar_fidelidad_tool`.\n"
+            "- Si se redimió beneficio, pasa `beneficio_fidelidad='DESCUENTO_15'` o `'GRANIZADO_GRATIS'`.\n\n"
+        )
+
+    if tools_cfg.get("consultar_fidelidad", True):
+        available_tools.append(consultar_fidelidad_tool)
+        reglas_herramientas_extra += (
+            "⚠️ REGLAS ESTRICTAS DE TARJETA DE FIDELIDAD (`consultar_fidelidad_tool`):\n"
+            "1. CONSULTA SILENCIOSA:\n"
+            "- Al inicio de la conversación de pedido, consulta SILENCIOSAMENTE usando el número de WhatsApp del cliente (`consultar_fidelidad_tool(identificador='')`).\n"
+            "- Si existe: salúdalo con su nombre (ej: '¡Hola [Nombre]!') y coméntale sus sellos actuales (ej: 'Llevas [X]/10 sellos en tu Tarjeta de Fidelidad Q\\'hubo Mor 🍧').\n"
+            "2. SI NO ESTÁ REGISTRADO POR TELÉFONO O NO TIENE CÉDULA/TARJETA DE IDENTIDAD:\n"
+            "- Pregúntale amablemente si tiene Tarjeta de Fidelidad de Q\'hubo Mor o si desea suministrarnos su número de cédula o tarjeta de identidad para buscarlo.\n"
+            "- Si responde que no tiene cédula, no tiene tarjeta de identidad, no la recuerda o no está registrado, INVÍTALO ACTIVAMENTE A INSCRIBIRSE GRATIS EN LA WEB explicándole que es súper fácil, gratis y toma solo 30 segundos, brindándole los enlaces oficiales:\n"
+            "  * Registro y Tarjeta: https://qhubomor.com/fidelidad\n"
+            "  * Misiones con sellos gratis: https://qhubomor.com/misiones\n"
+            "- ¡REGLA DE ORO: NUNCA BLOQUEES EL PEDIDO! Si no desea registrarse en ese momento o no da documento, continúa tomando su domicilio con total normalidad.\n"
+            "3. LÍMITE DE SELLOS Y PAUSAS (CHECKPOINTS EN 5 Y 10):\n"
+            "- El contador se pausa en 5 hasta que el cliente disfrute su descuento del 15% (no sube a 6 en esa misma compra).\n"
+            "- El contador se pausa en 10 hasta que el cliente reclame su Granizado 12oz Gratis (no se reinicia a 1 o 2 en esa compra).\n"
+            "4. CÁLCULO Y COTIZACIÓN DEL 15% DE DESCUENTO:\n"
+            "- El 15% de descuento aplica ÚNICAMENTE a Granizados. JAMÁS a comidas, bebidas en botella ni al valor del domicilio.\n"
+            "- Redondeo al millar hacia abajo: `descuento = (int(subtotal_granizados * 0.15) // 1000) * 1000` (Ejemplo: $3.750 -> $3.000; $4.500 -> $4.000).\n"
+            "- Cotiza el total con el descuento ya aplicado y aclara: 'La cajera validará tu descuento de fidelidad al despachar'.\n"
+            "5. GRANIZADO GRATIS (HITO 10):\n"
+            "- Si el cliente tiene 10 sellos, pregúntale: '¿Deseas tu Granizado 12oz GRATIS con licor o sin licor? ¿Y qué sabor te gustaría?'.\n"
+            "- Anota en la lista: '1x Granizado 12oz [Sabor] (Con/Sin Licor) - $0 [PREMIO FIDELIDAD 10/10]'.\n\n"
         )
         
     # Añadir herramientas nativas de Google (Search, Maps) si están habilitadas
@@ -289,7 +317,7 @@ def _build_graph(tools_list: list):
 
 
 # Grafo compilado (genérico; tools se aplican dinámicamente en call_model)
-_all_tools = [buscar_catalogo_tool, enviar_notificacion_tool]
+_all_tools = [buscar_catalogo_tool, enviar_notificacion_tool, consultar_fidelidad_tool]
 app_graph = _build_graph(_all_tools)
 
 
