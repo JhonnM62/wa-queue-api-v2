@@ -416,3 +416,164 @@ def phones_match(p1: Optional[str], p2: Optional[str]) -> bool:
     return False
 
 
+def is_pending_payment(metodo_pago: Optional[str]) -> bool:
+    """
+    Determina si un método de pago indica que aún se está esperando la confirmación o comprobante de pago.
+    Ejemplos: 'Nequi - Esperando el pago', 'Esperando comprobante', 'Pago pendiente', 'Transferencia', etc.
+    """
+    if not metodo_pago:
+        return False
+    mp = str(metodo_pago).lower().strip()
+
+    # Si dice explícitamente confirmado, verificado, pagado o exitoso, ya NO está pendiente
+    if any(k in mp for k in ["confirmad", "verificad", "comprobante", "pagad", "recibid", "exitos"]):
+        return False
+
+    pending_keywords = [
+        "espera",       # esperando, en espera, esperando comprobante, esperando el pago
+        "pendient",     # pendiente, pago pendiente
+        "por pagar",
+        "por confirmar",
+        "sin confirmar",
+    ]
+    if any(k in mp for k in pending_keywords):
+        return True
+
+    # Métodos de transferencia electrónica sin confirmación explícita
+    transfer_keywords = ["nequi", "daviplata", "bancolombia", "transferencia"]
+    if any(k in mp for k in transfer_keywords):
+        return True
+
+    return False
+
+
+def is_payment_confirmation(metodo_pago: Optional[str]) -> bool:
+    """
+    Determina si un método de pago entrante representa una confirmación o recibo de pago ya verificado.
+    """
+    if not metodo_pago:
+        return False
+    mp = str(metodo_pago).lower().strip()
+    confirmation_keywords = [
+        "confirmad",
+        "verificad",
+        "comprobante",
+        "pagad",
+        "recibid",
+        "exitos",
+        "transferid",
+    ]
+    return any(k in mp for k in confirmation_keywords)
+
+
+def extract_order_tokens(text: Optional[str]) -> set:
+    """
+    Extrae palabras clave de los productos del pedido para comparación semántica / jaccard.
+    Ignora palabras vacías, preposiciones y números.
+    """
+    if not text:
+        return set()
+    words = re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,}', text.lower())
+    ignore = {
+        'con', 'sin', 'para', 'por', 'gratis', 'promo', 'combo', 'del', 'las', 'los',
+        'una', 'uno', 'dos', 'tres', 'item', 'items', 'detalle', 'completo', 'orden',
+        'pedido', 'productos', 'producto', 'total', 'cobrar', 'cliente', 'pesos'
+    }
+    return {w for w in words if w not in ignore}
+
+
+def order_items_similarity(det1: Optional[str], det2: Optional[str]) -> float:
+    """
+    Calcula la similitud Jaccard (0.0 a 1.0) entre las listas de productos de dos pedidos.
+    """
+    t1 = extract_order_tokens(det1)
+    t2 = extract_order_tokens(det2)
+    if not t1 or not t2:
+        return 0.0
+    intersection = t1 & t2
+    union = t1 | t2
+    return len(intersection) / len(union)
+
+
+def are_orders_matching(
+    existing_order: dict,
+    new_detalle: str,
+    new_total: str,
+    new_metodo_pago: str,
+    time_diff_ms: int,
+    modification_window_ms: int = 20 * 60 * 1000,
+    payment_update_window_ms: int = 2 * 3600 * 1000
+) -> tuple[bool, bool]:
+    """
+    Determina de forma robusta e inteligente si un pedido entrante corresponde a un pedido activo existente.
+    
+    Reglas de negocio:
+    1. Un pedido con status 'Despachados' o 'Cancelados' NUNCA se modifica; cualquier pedido posterior es NUEVO.
+    2. Si el pedido activo estaba ESPERANDO PAGO (Nequi, transferencia, esperando comprobante, etc.), la cocina
+       NO ha preparado la comida. Por tanto, cuando el cliente confirma o actualiza el pago (hasta en 2 horas),
+       SIEMPRE es una actualización in-place del pedido activo, evitando duplicados en dashboard y ERP.
+    3. Si los productos y el total son los mismos (o similitud >= 0.6 con mismo total en dígitos), se considera
+       actualización in-place dentro de la ventana de 2 horas.
+    4. Si el cliente pide productos diferentes o adicionales:
+       - Si estamos dentro de los 20 min ('aún estamos a tiempo'): se modifica/adiciona al pedido activo in-place.
+       - Si pasaron más de 20 min y el pedido anterior YA ESTABA PAGADO/EN EFECTIVO: la cocina ya lo preparó,
+         por lo que se crea un NUEVO pedido independiente.
+       - Si pasaron más de 20 min pero el pedido original SEGUÍA esperando pago: se permite actualizar in-place
+         porque aún no fue preparado en cocina.
+
+    Devuelve: (matches_order, same_items_and_total)
+    """
+    if not isinstance(existing_order, dict):
+        return False, False
+
+    old_status = existing_order.get("status")
+    if old_status not in ["Recientes", "En proceso"]:
+        return False, False
+
+    old_detalle = existing_order.get("detalle_completo", "") or existing_order.get("pedido", "")
+    old_total = existing_order.get("total_a_cobrar", "")
+    old_mp = existing_order.get("metodo_pago", "")
+
+    old_digits = re.sub(r'\D', '', str(old_total or ""))
+    new_digits = re.sub(r'\D', '', str(new_total or ""))
+    same_total = bool(old_digits and new_digits and old_digits == new_digits)
+
+    sim = order_items_similarity(old_detalle, new_detalle)
+
+    old_pending = is_pending_payment(old_mp)
+    new_confirming = is_payment_confirmation(new_metodo_pago)
+    new_is_cash = any(k in str(new_metodo_pago).lower() for k in ["efectivo", "contra entrega", "paga con"])
+
+    # Caso 1: El pedido anterior estaba esperando pago Y ahora el cliente confirma o actualiza el pago/datos
+    if old_pending or (new_confirming and (same_total or sim >= 0.3)):
+        if time_diff_ms < payment_update_window_ms:
+            if same_total or sim >= 0.3 or new_confirming or new_is_cash:
+                is_same_items = same_total and (sim >= 0.4 or old_pending)
+                return True, is_same_items
+
+    # Caso 2: Mismos productos y total (o resumen genérico) dentro de la ventana de actualización (2 horas)
+    texto_lower = (new_detalle or "").lower()
+    is_generic_summary = "historial" in texto_lower or "productos por un total" in texto_lower
+
+    det_norm_old = "".join(c.lower() for c in str(old_detalle) if c.isascii() and c.isalnum())
+    det_norm_new = "".join(c.lower() for c in str(new_detalle) if c.isascii() and c.isalnum())
+    exact_sig_match = (det_norm_old == det_norm_new and same_total)
+
+    if is_generic_summary or exact_sig_match or (same_total and sim >= 0.6) or sim >= 0.85:
+        if time_diff_ms < payment_update_window_ms:
+            return True, True
+
+    # Caso 3: Productos diferentes o adición de productos ("pidió algo más")
+    # Si aún estamos dentro de los 20 minutos ("aún estamos a tiempo"):
+    if time_diff_ms < modification_window_ms:
+        return True, False
+
+    # Si pasaron más de 20 minutos pero el pedido original NUNCA fue pagado (sigue esperando pago):
+    if old_pending and time_diff_ms < payment_update_window_ms:
+        return True, False
+
+    # Si pasaron más de 20 minutos y el pedido ya estaba confirmado/pagado/en efectivo:
+    return False, False
+
+
+

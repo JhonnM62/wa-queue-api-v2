@@ -37,6 +37,7 @@ from core.phone_utils import (
     format_money,
     canonical_order_signature,
     phones_match,
+    are_orders_matching,
 )
 
 # Cargar variables de entorno del archivo .env
@@ -2572,41 +2573,33 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
 
                                     time_diff_ms = order_timestamp - order_ts
 
-                                    # Comparar firma canónica de productos + total
-                                    old_sig = canonical_order_signature(
-                                        odata.get("detalle_completo", "") or odata.get("pedido", ""),
-                                        odata.get("total_a_cobrar", "")
+                                    matches_order, is_same_items = are_orders_matching(
+                                        existing_order=odata,
+                                        new_detalle=order_info.get("detalle_completo", "") or order_info.get("pedido", ""),
+                                        new_total=order_info.get("total_a_cobrar", ""),
+                                        new_metodo_pago=order_info.get("metodo_pago", ""),
+                                        time_diff_ms=time_diff_ms,
+                                        modification_window_ms=MODIFICATION_WINDOW_MS,
+                                        payment_update_window_ms=PAYMENT_UPDATE_WINDOW_MS
                                     )
-                                    new_sig = canonical_order_signature(
-                                        order_info.get("detalle_completo", ""),
-                                        order_info.get("total_a_cobrar", "")
-                                    )
-                                    items_match = (old_sig == new_sig)
 
-                                    if items_match:
-                                        if time_diff_ms < PAYMENT_UPDATE_WINDOW_MS:
-                                            is_modification = True
-                                            existing_order_id = oid
-                                            existing_order = odata
-                                            same_items_and_total = True
-                                            break
+                                    if matches_order:
+                                        is_modification = True
+                                        existing_order_id = oid
+                                        existing_order = odata
+                                        same_items_and_total = is_same_items
+                                        break
                                     else:
-                                        if time_diff_ms < MODIFICATION_WINDOW_MS:
-                                            is_modification = True
-                                            existing_order_id = oid
-                                            existing_order = odata
-                                            same_items_and_total = False
-                                            break
-                                        else:
+                                        if time_diff_ms >= MODIFICATION_WINDOW_MS:
                                             print(
                                                 f"{log_prefix} ⏱️ Pasaron {time_diff_ms / 60000:.1f} min desde el pedido {oid} (> 20 min). "
-                                                f"Como el cliente pidió productos adicionales/diferentes, se crea un NUEVO pedido independiente.",
+                                                f"Como el cliente pidió productos adicionales/diferentes y el pedido anterior ya estaba consolidado, se crea un NUEVO pedido independiente.",
                                                 flush=True
                                             )
-                                            is_modification = False
-                                            existing_order_id = None
-                                            existing_order = None
-                                            break
+                                        is_modification = False
+                                        existing_order_id = None
+                                        existing_order = None
+                                        break
                                 
                                 order_id = existing_order_id if existing_order_id else f"ORDER_{int(time.time())}_{display_phone[-4:]}"
 
@@ -2636,6 +2629,21 @@ async def delayed_processing_task(task_key: str, current_task_req_info: MessageR
                                     }
 
                                     if is_modification and existing_order_id:
+                                        # Preservar dirección anterior si la nueva es "N.A." o vacía
+                                        old_addr = existing_order.get("direccion", "")
+                                        new_addr_lower = (order_info.get("direccion", "") or "").lower().strip()
+                                        if new_addr_lower in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"] or not new_addr_lower:
+                                            if old_addr and old_addr.lower() not in ["n/a", "n.a.", "n.a", "no aplica", "no especificada", "ya registrada", "n.a. (no aplica)"]:
+                                                order_info["direccion"] = old_addr
+
+                                        # Preservar fidelidad si ya existía
+                                        if existing_order.get("cliente_id"):
+                                            orders_data[order_id]["cliente_id"] = existing_order.get("cliente_id")
+                                        if existing_order.get("cliente_cedula"):
+                                            orders_data[order_id]["cliente_cedula"] = existing_order.get("cliente_cedula")
+                                        if existing_order.get("beneficio_fidelidad"):
+                                            orders_data[order_id]["beneficio_fidelidad"] = existing_order.get("beneficio_fidelidad")
+
                                         # Es un pedido modificado reciente del mismo cliente en estado Recientes.
                                         orders_data[order_id]["summary"] = order_info.get(
                                             "resumen", "")

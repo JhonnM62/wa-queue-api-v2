@@ -18,6 +18,7 @@ from core.phone_utils import (
     format_money,
     canonical_order_signature,
     phones_match,
+    are_orders_matching,
 )
 
 
@@ -358,45 +359,33 @@ def enviar_notificacion_tool(
 
                 time_diff_ms = order_timestamp - order_ts
 
-                # Comparar productos y total con el pedido activo
-                old_sig = canonical_order_signature(
-                    odata.get("detalle_completo", "") or odata.get("pedido", ""),
-                    odata.get("total_a_cobrar", "")
+                matches_order, is_same_items = are_orders_matching(
+                    existing_order=odata,
+                    new_detalle=detalle_completo,
+                    new_total=total_a_cobrar,
+                    new_metodo_pago=metodo_pago,
+                    time_diff_ms=time_diff_ms,
+                    modification_window_ms=MODIFICATION_WINDOW_MS,
+                    payment_update_window_ms=PAYMENT_UPDATE_WINDOW_MS
                 )
-                new_sig = canonical_order_signature(detalle_completo, total_a_cobrar)
-                texto_lower = (lista_productos or "").lower()
-                is_generic_summary = "historial" in texto_lower or "productos por un total" in texto_lower
-                items_match = is_generic_summary or (old_sig == new_sig)
 
-                if items_match:
-                    # Mismos productos (ej. aclarando pago, enviando comprobante o confirmando dirección)
-                    if time_diff_ms < PAYMENT_UPDATE_WINDOW_MS:
-                        is_modification = True
-                        existing_order_id = oid
-                        existing_order = odata
-                        same_items_and_total = True
-                        break
+                if matches_order:
+                    is_modification = True
+                    existing_order_id = oid
+                    existing_order = odata
+                    same_items_and_total = is_same_items
+                    break
                 else:
-                    # Productos diferentes o adición de ítems ("pidió algo más")
-                    if time_diff_ms < MODIFICATION_WINDOW_MS:
-                        # Aún estamos a tiempo (< 20 min): modificar/adicionar al pedido activo in-place
-                        is_modification = True
-                        existing_order_id = oid
-                        existing_order = odata
-                        same_items_and_total = False
-                        break
-                    else:
-                        # Pasaron más de 20 minutos: la cocina ya preparó o despachó la orden anterior.
-                        # Debe tratarse como NUEVO pedido independiente.
+                    if time_diff_ms >= MODIFICATION_WINDOW_MS:
                         print(
                             f"[tools/enviar_notificacion/{user_phone}] ⏱️ Pasaron {time_diff_ms / 60000:.1f} min desde el pedido {oid} (> 20 min). "
-                            f"Como el cliente pidió productos adicionales/diferentes, se crea un NUEVO pedido independiente.",
+                            f"Como el cliente pidió productos adicionales/diferentes y el pedido anterior ya estaba consolidado, se crea un NUEVO pedido independiente.",
                             flush=True
                         )
-                        is_modification = False
-                        existing_order_id = None
-                        existing_order = None
-                        break
+                    is_modification = False
+                    existing_order_id = None
+                    existing_order = None
+                    break
 
         is_exact_duplicate = False
         if is_modification and existing_order_id and existing_order:
@@ -445,6 +434,20 @@ def enviar_notificacion_tool(
                 orders_data[existing_order_id]["meta_identifier"] = user_phone
             if nombre_cliente and nombre_cliente.strip().lower() not in ["", "no especificado", "no aplica", "n/a", "na"]:
                 orders_data[existing_order_id]["extracted_name"] = nombre_cliente.strip()
+            if not cliente_id and existing_order.get("cliente_id"):
+                cliente_id = existing_order.get("cliente_id")
+            if not cliente_cedula and existing_order.get("cliente_cedula"):
+                cliente_cedula = existing_order.get("cliente_cedula")
+            if not beneficio_fidelidad and existing_order.get("beneficio_fidelidad"):
+                beneficio_fidelidad = existing_order.get("beneficio_fidelidad")
+
+            if cliente_id:
+                orders_data[existing_order_id]["cliente_id"] = cliente_id
+            if cliente_cedula:
+                orders_data[existing_order_id]["cliente_cedula"] = cliente_cedula
+            if beneficio_fidelidad:
+                orders_data[existing_order_id]["beneficio_fidelidad"] = beneficio_fidelidad
+
             order_id = existing_order_id
             
             # Si preservamos el detalle anterior, asegurarnos de usarlo para la notificación HTTP de WhatsApp
@@ -472,32 +475,38 @@ def enviar_notificacion_tool(
                 "history": [{"status": "Recientes", "timestamp": order_timestamp}],
                 "origen": "tool_langgraph",
                 "extracted_phone": phone_info["extracted_phone"],
-                "extracted_name": nombre_cliente
+                "extracted_name": nombre_cliente,
+                "cliente_id": cliente_id,
+                "cliente_cedula": cliente_cedula,
+                "beneficio_fidelidad": beneficio_fidelidad
             }
             print(f"[tools/enviar_notificacion/{user_phone}] Nuevo pedido guardado en dashboard (ID: {order_id}).", flush=True)
 
         with open(ORDERS_FILE_PATH, 'w', encoding='utf-8') as f:
             json.dump(orders_data, f, ensure_ascii=False, indent=4)
 
-        # 1.1 Despachar webhook a los sistemas POS ERP configurados
-        pos_endpoints_cfg = config_dict.get("pos_endpoints", "[]")
-        order_webhook_payload = {
-            "orderIdWA": order_id,
-            "clienteTelefono": display_phone,
-            "clienteNombre": nombre_cliente if nombre_cliente and str(nombre_cliente).strip().lower() not in ["no especificado", "no aplica", "n/a", "na", ""] else "",
-            "clienteId": cliente_id,
-            "clienteCedula": cliente_cedula,
-            "beneficioFidelidad": beneficio_fidelidad,
-            "direccion": direccion_envio,
-            "detalleTextoWA": detalle_completo or lista_productos,
-            "resumen": resumen_general,
-            "totalWA": total_a_cobrar,
-            "metodoPagoWA": metodo_pago,
-            "timestamp": order_timestamp,
-            "isModification": is_modification,
-            "userbot": config_dict.get("userbot_identifier") or userbot
-        }
-        dispatch_order_to_pos_webhooks(pos_endpoints_cfg, order_webhook_payload)
+        # 1.1 Despachar webhook a los sistemas POS ERP configurados (solo si no es duplicado exacto)
+        if not is_exact_duplicate:
+            pos_endpoints_cfg = config_dict.get("pos_endpoints", "[]")
+            order_webhook_payload = {
+                "orderIdWA": order_id,
+                "clienteTelefono": display_phone,
+                "clienteNombre": nombre_cliente if nombre_cliente and str(nombre_cliente).strip().lower() not in ["no especificado", "no aplica", "n/a", "na", ""] else "",
+                "clienteId": cliente_id,
+                "clienteCedula": cliente_cedula,
+                "beneficioFidelidad": beneficio_fidelidad,
+                "direccion": direccion_envio,
+                "detalleTextoWA": detalle_completo or lista_productos,
+                "resumen": resumen_general,
+                "totalWA": total_a_cobrar,
+                "metodoPagoWA": metodo_pago,
+                "timestamp": order_timestamp,
+                "isModification": is_modification,
+                "userbot": config_dict.get("userbot_identifier") or userbot
+            }
+            dispatch_order_to_pos_webhooks(pos_endpoints_cfg, order_webhook_payload)
+        else:
+            print(f"[tools/enviar_notificacion/{user_phone}] ⚠️ Omitiendo webhook a POS ERP por duplicado exacto sin modificaciones.", flush=True)
 
         # Registrar timestamp de notificación en orders_data para prevenir duplicados en ventana corta
         if order_id in orders_data:
